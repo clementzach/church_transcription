@@ -206,16 +206,32 @@
     flex: 1;
   }
 
+  #lang-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+  }
+
+  #lang-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: #999;
+    text-transform: uppercase;
+  }
+
   /* ── Fullscreen hides header ── */
   :fullscreen #header { display: none; }
   :-webkit-full-screen #header { display: none; }
 
-  :fullscreen #grid {
-    top: 0;
-  }
-  :-webkit-full-screen #grid {
-    top: 0;
-  }
+  :fullscreen #grid { top: 0; }
+  :-webkit-full-screen #grid { top: 0; }
+
+  /* ── Hidden header state ── */
+  body.header-hidden #header { display: none; }
+  body.header-hidden #grid { top: 0; }
 </style>
 </head>
 <body>
@@ -224,11 +240,14 @@
 <div id="header">
   <div id="app-title">Live Captions</div>
 
-  <div id="lang-toggle">
-    <button class="lang-btn active" data-lang="en">EN</button>
-    <button class="lang-btn" data-lang="es">ES</button>
-    <button class="lang-btn" data-lang="ht">HT</button>
-    <button class="lang-btn" data-lang="pt">PT</button>
+  <div id="lang-section">
+    <span id="lang-label">Toggle spoken language</span>
+    <div id="lang-toggle">
+      <button class="lang-btn active" data-lang="en">EN</button>
+      <button class="lang-btn" data-lang="es">ES</button>
+      <button class="lang-btn" data-lang="ht">HT</button>
+      <button class="lang-btn" data-lang="pt">PT</button>
+    </div>
   </div>
 
   <div id="controls">
@@ -263,6 +282,7 @@
 <div id="bottom-bar">
   <span id="mic-icon">🎙</span>
   <span id="bottom-partial"></span>
+  <button class="ctrl-btn" id="hide-btn">Hide controls</button>
 </div>
 
 <script>
@@ -329,6 +349,13 @@ fsBtn.addEventListener('click', () => {
   } else {
     document.exitFullscreen().catch(() => {});
   }
+});
+
+// ── Hide/show header ───────────────────────────────────────────────────────
+const hideBtn = document.getElementById('hide-btn');
+hideBtn.addEventListener('click', () => {
+  const hidden = document.body.classList.toggle('header-hidden');
+  hideBtn.textContent = hidden ? 'Show controls' : 'Hide controls';
 });
 
 // ── Start / Stop buttons ───────────────────────────────────────────────────
