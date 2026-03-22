@@ -561,6 +561,7 @@ function float32ToInt16(float32) {
 
 // ── Gladia message routing ────────────────────────────────────────────────
 function handleGladiaMessage(msg) {
+  console.log('[gladia]', JSON.stringify(msg));
   const type = msg.type;
 
   if (type === 'transcript') {
