@@ -455,7 +455,7 @@ async function startSession() {
   // Init session with Gladia
   let gladiaWsUrl;
   try {
-    const resp = await fetch('/church/init-session', {
+    const resp = await fetch('/church_transcription/init-session', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -491,7 +491,7 @@ async function startSession() {
 
   // Open backend WebSocket
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${wsProto}//${location.host}/church/stream`);
+  ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', () => {
