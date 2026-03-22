@@ -2,7 +2,7 @@ import os
 import json
 import threading
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_sock import Sock
 from dotenv import load_dotenv
 import websocket
@@ -13,6 +13,11 @@ app = Flask(__name__)
 sock = Sock(app)
 
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
+
+
+@app.route("/")
+def index():
+    return send_from_directory("static", "index.html")
 
 
 @app.route("/init-session", methods=["POST"])
