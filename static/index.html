@@ -561,7 +561,6 @@ function float32ToInt16(float32) {
 
 // ── Gladia message routing ────────────────────────────────────────────────
 function handleGladiaMessage(msg) {
-  console.log('[gladia]', JSON.stringify(msg));
   const type = msg.type;
 
   if (type === 'transcript') {
@@ -580,29 +579,15 @@ function handleGladiaMessage(msg) {
   }
 
   if (type === 'translation') {
-    // Gladia translation event structure:
-    // msg.data.utterance.text, msg.data.target_language (or similar)
     const data = msg.data || {};
-    const utterances = data.utterances || (data.utterance ? [data.utterance] : []);
-    utterances.forEach(u => {
-      const lang = (u.target_language || u.language || '').toLowerCase();
-      const text = u.text || '';
-      if (ALL_LANGS.includes(lang) && lang !== selectedLang) {
-        commitLine(lang, text);
-      }
-    });
+    const lang = (data.target_language || '').toLowerCase();
+    const text = (data.translated_utterance || {}).text || '';
+    if (ALL_LANGS.includes(lang) && lang !== selectedLang && text) {
+      commitLine(lang, text);
+    }
     return;
   }
 
-  // Also handle older-style nested event shape
-  if (msg.event === 'transcript') {
-    handleGladiaMessage({ type: 'transcript', data: msg });
-    return;
-  }
-  if (msg.event === 'translation') {
-    handleGladiaMessage({ type: 'translation', data: msg });
-    return;
-  }
 }
 
 // ── Init render ───────────────────────────────────────────────────────────
