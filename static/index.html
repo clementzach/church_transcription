@@ -86,18 +86,7 @@
     flex-shrink: 0;
   }
 
-  #api-key-input {
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-family: inherit;
-    font-size: 13px;
-    width: 160px;
-    outline: none;
-  }
-  #api-key-input:focus { border-color: #aaa; }
-
-  .ctrl-btn {
+.ctrl-btn {
     padding: 4px 12px;
     border-radius: 6px;
     border: 1px solid var(--border);
@@ -243,7 +232,6 @@
   </div>
 
   <div id="controls">
-    <input id="api-key-input" type="password" placeholder="Gladia API key" autocomplete="off">
     <button class="ctrl-btn" id="start-btn">Start</button>
     <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
     <button class="ctrl-btn" id="fs-btn">⛶</button>
@@ -328,17 +316,8 @@ const partials = { en: '', es: '', ht: '', pt: '' };
 const startBtn   = document.getElementById('start-btn');
 const stopBtn    = document.getElementById('stop-btn');
 const fsBtn      = document.getElementById('fs-btn');
-const apiKeyInput = document.getElementById('api-key-input');
 const statusDot  = document.getElementById('status-dot');
 const bottomPartial = document.getElementById('bottom-partial');
-
-// Restore API key from sessionStorage
-if (sessionStorage.getItem('gladiaKey')) {
-  apiKeyInput.value = sessionStorage.getItem('gladiaKey');
-}
-apiKeyInput.addEventListener('input', () => {
-  sessionStorage.setItem('gladiaKey', apiKeyInput.value.trim());
-});
 
 // ── Language toggle ────────────────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -438,9 +417,6 @@ function clearPanels() {
 async function startSession() {
   if (isRunning) return;
 
-  const apiKey = apiKeyInput.value.trim() || sessionStorage.getItem('gladiaKey') || '';
-  if (!apiKey) { alert('Enter a Gladia API key first.'); return; }
-
   clearReconnectTimer();
 
   // Build config
@@ -459,7 +435,6 @@ async function startSession() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Gladia-Key': apiKey
       },
       body: JSON.stringify(config)
     });
