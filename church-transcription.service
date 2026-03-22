@@ -1,0 +1,25 @@
+[Unit]
+Description=Church Transcription web service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/zacharyclement/church_transcription
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/zacharyclement/church_transcription/.env
+RuntimeDirectory=church-transcription
+RuntimeDirectoryMode=0750
+StateDirectory=church-transcription
+UMask=007
+ExecStart=/home/zacharyclement/church_transcription/venv/bin/gunicorn \
+  -k gevent -w 1 --bind unix:/run/church-transcription/gunicorn.sock app:app
+
+Restart=on-failure
+RestartSec=2
+User=www-data
+Group=www-data
+MemoryMax=500M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+flask
+flask-sock
+python-dotenv
+requests
+websocket-client
+gunicorn
+gevent
