@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Captions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --en: #3b82f6;
+    --es: #f97316;
+    --ht: #22c55e;
+    --pt: #a855f7;
+    --border: #e5e5e5;
+    --bg: #ffffff;
+    --text: #111111;
+    --header-h: 56px;
+    --bar-h: 36px;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  #header {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: var(--header-h);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    z-index: 10;
+  }
+
+  #app-title {
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  #lang-toggle {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+    justify-content: center;
+  }
+
+  .lang-btn {
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1.5px solid var(--c);
+    background: transparent;
+    color: var(--c);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .lang-btn[data-lang="en"] { --c: var(--en); }
+  .lang-btn[data-lang="es"] { --c: var(--es); }
+  .lang-btn[data-lang="ht"] { --c: var(--ht); }
+  .lang-btn[data-lang="pt"] { --c: var(--pt); }
+  .lang-btn.active {
+    background: var(--c);
+    color: #fff;
+  }
+
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  #api-key-input {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    width: 160px;
+    outline: none;
+  }
+  #api-key-input:focus { border-color: #aaa; }
+
+  .ctrl-btn {
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .ctrl-btn:hover { background: #f5f5f5; }
+  .ctrl-btn:disabled { opacity: 0.4; cursor: default; }
+
+  #status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #aaa;
+    flex-shrink: 0;
+  }
+  #status-dot.live {
+    background: #ef4444;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+  }
+
+  /* ── Grid ── */
+  #grid {
+    position: fixed;
+    top: var(--header-h);
+    bottom: var(--bar-h);
+    left: 0; right: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 0;
+  }
+
+  .panel {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    margin: 6px;
+    padding: 14px 18px 14px 16px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .panel[data-lang="en"] { --accent: var(--en); }
+  .panel[data-lang="es"] { --accent: var(--es); }
+  .panel[data-lang="ht"] { --accent: var(--ht); }
+  .panel[data-lang="pt"] { --accent: var(--pt); }
+
+  .panel-tag {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+
+  .panel-lines {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    flex: 1;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .line {
+    line-height: 1.35;
+    word-break: break-word;
+    animation: fadein 0.3s ease;
+  }
+  @keyframes fadein {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .line-current  { font-size: 28px; font-weight: 500; opacity: 1; }
+  .line-prev     { font-size: 18px; opacity: 0.45; }
+  .line-older    { font-size: 14px; opacity: 0.20; }
+  .line-partial  { font-style: italic; opacity: 0.7; font-size: 28px; color: #555; }
+
+  /* ── Bottom bar ── */
+  #bottom-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    height: var(--bar-h);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    z-index: 10;
+  }
+
+  #mic-icon {
+    font-size: 15px;
+    flex-shrink: 0;
+    opacity: 0.5;
+  }
+
+  #bottom-partial {
+    font-size: 12px;
+    font-style: italic;
+    color: #888;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  /* ── Fullscreen hides header ── */
+  :fullscreen #header { display: none; }
+  :-webkit-full-screen #header { display: none; }
+
+  :fullscreen #grid {
+    top: 0;
+  }
+  :-webkit-full-screen #grid {
+    top: 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <div id="app-title">Live Captions</div>
+
+  <div id="lang-toggle">
+    <button class="lang-btn active" data-lang="en">EN</button>
+    <button class="lang-btn" data-lang="es">ES</button>
+    <button class="lang-btn" data-lang="ht">HT</button>
+    <button class="lang-btn" data-lang="pt">PT</button>
+  </div>
+
+  <div id="controls">
+    <input id="api-key-input" type="password" placeholder="Gladia API key" autocomplete="off">
+    <button class="ctrl-btn" id="start-btn">Start</button>
+    <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
+    <button class="ctrl-btn" id="fs-btn">⛶</button>
+    <div id="status-dot"></div>
+  </div>
+</div>
+
+<!-- Caption grid -->
+<div id="grid">
+  <div class="panel" data-lang="en">
+    <div class="panel-tag">EN</div>
+    <div class="panel-lines" id="lines-en"></div>
+  </div>
+  <div class="panel" data-lang="es">
+    <div class="panel-tag">ES</div>
+    <div class="panel-lines" id="lines-es"></div>
+  </div>
+  <div class="panel" data-lang="ht">
+    <div class="panel-tag">HT</div>
+    <div class="panel-lines" id="lines-ht"></div>
+  </div>
+  <div class="panel" data-lang="pt">
+    <div class="panel-tag">PT</div>
+    <div class="panel-lines" id="lines-pt"></div>
+  </div>
+</div>
+
+<!-- Bottom bar -->
+<div id="bottom-bar">
+  <span id="mic-icon">🎙</span>
+  <span id="bottom-partial"></span>
+</div>
+
+<script>
+// ── Constants ──────────────────────────────────────────────────────────────
+const ALL_LANGS = ['en', 'es', 'ht', 'pt'];
+const GLADIA_CONFIG_BASE = {
+  encoding: 'wav/pcm',
+  sample_rate: 16000,
+  bit_depth: 16,
+  channels: 1,
+  realtime_processing: {
+    translation: true,
+    translation_config: {
+      model: 'base',
+      match_original_utterances: true,
+      context_adaptation: true,
+      context: 'This is a Latter-day Saint (LDS/Mormon) church service. Speakers may reference LDS-specific scripture, theology, and organizational terms. Preserve proper nouns exactly as spoken.'
+    }
+  },
+  custom_vocabulary: [
+    'Nephi','Alma','Moroni','Helaman','Mosiah','Liahona',
+    'Urim','Thummim','Ether','Omni','Abinadi','Ammon',
+    'Elder','Sister','Brother','Bishop','Stake President',
+    'Relief Society','Melchizedek','Aaronic','Eliza R. Snow',
+    'ward','stake','quorum','sacrament','priesthood',
+    'endowment','covenants','General Conference','Come Follow Me',
+    'testimony','Fast Sunday','ministering','seminary',
+    'Young Women','Young Men','Primary','Mutual',
+    'Joseph Smith','Brigham Young','Book of Mormon',
+    'Doctrine and Covenants','Pearl of Great Price'
+  ]
+};
+
+// ── State ──────────────────────────────────────────────────────────────────
+let selectedLang = 'en';
+let ws = null;
+let mediaRecorder = null;
+let audioContext = null;
+let scriptProcessor = null;
+let sourceNode = null;
+let micStream = null;
+let isRunning = false;
+let reconnectTimer = null;
+
+// Per-panel history: array of up to 3 committed lines
+const history = { en: [], es: [], ht: [], pt: [] };
+// Current partial text per panel (only source panel uses it)
+const partials = { en: '', es: '', ht: '', pt: '' };
+
+// ── UI refs ────────────────────────────────────────────────────────────────
+const startBtn   = document.getElementById('start-btn');
+const stopBtn    = document.getElementById('stop-btn');
+const fsBtn      = document.getElementById('fs-btn');
+const apiKeyInput = document.getElementById('api-key-input');
+const statusDot  = document.getElementById('status-dot');
+const bottomPartial = document.getElementById('bottom-partial');
+
+// Restore API key from sessionStorage
+if (sessionStorage.getItem('gladiaKey')) {
+  apiKeyInput.value = sessionStorage.getItem('gladiaKey');
+}
+apiKeyInput.addEventListener('input', () => {
+  sessionStorage.setItem('gladiaKey', apiKeyInput.value.trim());
+});
+
+// ── Language toggle ────────────────────────────────────────────────────────
+document.querySelectorAll('.lang-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const lang = btn.dataset.lang;
+    if (lang === selectedLang) return;
+    selectedLang = lang;
+    document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
+
+    if (isRunning) {
+      // Silent reconnect
+      stopSession(false).then(() => startSession());
+    }
+  });
+});
+
+// ── Fullscreen ─────────────────────────────────────────────────────────────
+fsBtn.addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+});
+
+// ── Start / Stop buttons ───────────────────────────────────────────────────
+startBtn.addEventListener('click', startSession);
+stopBtn.addEventListener('click', () => stopSession(true));
+
+// ── Render panel ──────────────────────────────────────────────────────────
+function renderPanel(lang) {
+  const container = document.getElementById('lines-' + lang);
+  const h = history[lang];
+  const partial = (lang === selectedLang) ? partials[lang] : '';
+  const lines = [];
+
+  // Build from oldest to newest (max 3 committed)
+  const kept = h.slice(-3);
+  kept.forEach((text, i) => {
+    const fromEnd = kept.length - 1 - i; // 0 = newest committed
+    lines.push({ text, fromEnd });
+  });
+
+  let html = '';
+
+  // Older committed lines
+  lines.forEach(({ text, fromEnd }) => {
+    let cls;
+    if (partial) {
+      // partial is "current" so committed lines shift
+      if (fromEnd === 0) cls = 'line line-prev';
+      else               cls = 'line line-older';
+    } else {
+      if (fromEnd === 0) cls = 'line line-current';
+      else if (fromEnd === 1) cls = 'line line-prev';
+      else               cls = 'line line-older';
+    }
+    html += `<div class="${cls}">${escHtml(text)}</div>`;
+  });
+
+  if (partial) {
+    html += `<div class="line line-partial">${escHtml(partial)}</div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function commitLine(lang, text) {
+  if (!text || !text.trim()) return;
+  history[lang].push(text.trim());
+  if (history[lang].length > 3) history[lang].shift();
+  partials[lang] = '';
+  renderPanel(lang);
+}
+
+function setPartial(lang, text) {
+  if (lang !== selectedLang) return; // no partials on translation panels
+  partials[lang] = text;
+  renderPanel(lang);
+  bottomPartial.textContent = text;
+}
+
+function clearPanels() {
+  ALL_LANGS.forEach(l => {
+    history[l] = [];
+    partials[l] = '';
+    renderPanel(l);
+  });
+  bottomPartial.textContent = '';
+}
+
+// ── Session management ────────────────────────────────────────────────────
+async function startSession() {
+  if (isRunning) return;
+
+  const apiKey = apiKeyInput.value.trim() || sessionStorage.getItem('gladiaKey') || '';
+  if (!apiKey) { alert('Enter a Gladia API key first.'); return; }
+
+  clearReconnectTimer();
+
+  // Build config
+  const targetLangs = ALL_LANGS.filter(l => l !== selectedLang);
+  const config = JSON.parse(JSON.stringify(GLADIA_CONFIG_BASE));
+  config.language_config = {
+    languages: [selectedLang],
+    code_switching: false
+  };
+  config.realtime_processing.translation_config.target_languages = targetLangs;
+
+  // Init session with Gladia
+  let gladiaWsUrl;
+  try {
+    const resp = await fetch('/init-session', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Gladia-Key': apiKey
+      },
+      body: JSON.stringify(config)
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Init session failed (${resp.status}): ${text}`);
+    }
+    const data = await resp.json();
+    gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
+    if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
+  } catch (err) {
+    alert('Failed to start session: ' + err.message);
+    return;
+  }
+
+  // Get mic
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (err) {
+    alert('Microphone access denied: ' + err.message);
+    return;
+  }
+
+  isRunning = true;
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  statusDot.classList.add('live');
+  clearPanels();
+
+  // Open backend WebSocket
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${wsProto}//${location.host}/stream`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    // First message: Gladia URL
+    ws.send(gladiaWsUrl);
+    startAudio();
+  });
+
+  ws.addEventListener('message', (evt) => {
+    if (typeof evt.data !== 'string') return;
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    handleGladiaMessage(msg);
+  });
+
+  ws.addEventListener('close', (evt) => {
+    if (!isRunning) return;
+    // Unexpected close — reconnect
+    if (evt.code !== 1000) {
+      scheduleReconnect();
+    }
+  });
+
+  ws.addEventListener('error', () => {
+    if (isRunning) scheduleReconnect();
+  });
+}
+
+async function stopSession(userInitiated = true) {
+  isRunning = false;
+  clearReconnectTimer();
+
+  // Send terminate to Gladia via ws
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: 'stop_recording' }));
+    } catch (_) {}
+    setTimeout(() => { try { ws.close(1000); } catch (_) {} }, 200);
+  }
+  ws = null;
+
+  stopAudio();
+
+  if (userInitiated) {
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    statusDot.classList.remove('live');
+    bottomPartial.textContent = '';
+  }
+}
+
+function scheduleReconnect() {
+  clearReconnectTimer();
+  stopAudio();
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  reconnectTimer = setTimeout(() => {
+    if (!isRunning) return;
+    isRunning = false; // reset so startSession can proceed
+    startSession();
+  }, 1000);
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
+// ── Audio capture ─────────────────────────────────────────────────────────
+function startAudio() {
+  const TARGET_SR = 16000;
+  audioContext = new AudioContext({ sampleRate: TARGET_SR });
+  sourceNode = audioContext.createMediaStreamSource(micStream);
+
+  // 4096 samples @ 16kHz ≈ 256ms chunks
+  scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  scriptProcessor.onaudioprocess = (event) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const float32 = event.inputBuffer.getChannelData(0);
+    const int16 = float32ToInt16(float32);
+    // Prepend WAV header for first chunk, or send raw PCM
+    // Gladia wav/pcm encoding expects raw PCM 16-bit little-endian
+    ws.send(int16.buffer);
+  };
+
+  sourceNode.connect(scriptProcessor);
+  scriptProcessor.connect(audioContext.destination);
+}
+
+function stopAudio() {
+  if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
+  if (sourceNode)      { sourceNode.disconnect(); sourceNode = null; }
+  if (audioContext)    { audioContext.close().catch(() => {}); audioContext = null; }
+  if (micStream)       { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+}
+
+function float32ToInt16(float32) {
+  const int16 = new Int16Array(float32.length);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return int16;
+}
+
+// ── Gladia message routing ────────────────────────────────────────────────
+function handleGladiaMessage(msg) {
+  const type = msg.type;
+
+  if (type === 'transcript') {
+    const data = msg.data || {};
+    const utterance = data.utterance || {};
+    const text = utterance.text || '';
+    const isFinal = utterance.is_final === true || data.is_final === true;
+
+    if (isFinal) {
+      commitLine(selectedLang, text);
+      bottomPartial.textContent = '';
+    } else {
+      setPartial(selectedLang, text);
+    }
+    return;
+  }
+
+  if (type === 'translation') {
+    // Gladia translation event structure:
+    // msg.data.utterance.text, msg.data.target_language (or similar)
+    const data = msg.data || {};
+    const utterances = data.utterances || (data.utterance ? [data.utterance] : []);
+    utterances.forEach(u => {
+      const lang = (u.target_language || u.language || '').toLowerCase();
+      const text = u.text || '';
+      if (ALL_LANGS.includes(lang) && lang !== selectedLang) {
+        commitLine(lang, text);
+      }
+    });
+    return;
+  }
+
+  // Also handle older-style nested event shape
+  if (msg.event === 'transcript') {
+    handleGladiaMessage({ type: 'transcript', data: msg });
+    return;
+  }
+  if (msg.event === 'translation') {
+    handleGladiaMessage({ type: 'translation', data: msg });
+    return;
+  }
+}
+
+// ── Init render ───────────────────────────────────────────────────────────
+ALL_LANGS.forEach(renderPanel);
+</script>
+</body>
+</html>
