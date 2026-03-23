@@ -15,10 +15,11 @@
     --es: #f97316;
     --ht: #22c55e;
     --pt: #a855f7;
+    --zh: #ef4444;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
-    --header-h: 56px;
+    --header-h: 96px;
     --bar-h: 36px;
   }
 
@@ -30,18 +31,25 @@
     overflow: hidden;
   }
 
-  /* ── Header ── */
+  /* ── Header (2 rows) ── */
   #header {
     position: fixed;
     top: 0; left: 0; right: 0;
     height: var(--header-h);
     display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 0 20px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--bg);
     z-index: 10;
+  }
+
+  #header-row1, #header-row2 {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   #app-title {
@@ -51,34 +59,54 @@
     flex-shrink: 0;
   }
 
-  #lang-toggle {
+  /* ── Spoken language (row 2 left) ── */
+  .lang-group {
     display: flex;
-    gap: 6px;
-    flex: 1;
-    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
   }
 
-  .lang-btn {
-    padding: 4px 12px;
+  .lang-group-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #aaa;
+    white-space: nowrap;
+  }
+
+  #lang-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .lang-btn, .caption-btn {
+    padding: 3px 10px;
     border-radius: 6px;
     border: 1.5px solid var(--c);
     background: transparent;
     color: var(--c);
     font-family: inherit;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
-  .lang-btn[data-lang="en"] { --c: var(--en); }
-  .lang-btn[data-lang="es"] { --c: var(--es); }
-  .lang-btn[data-lang="ht"] { --c: var(--ht); }
-  .lang-btn[data-lang="pt"] { --c: var(--pt); }
-  .lang-btn.active {
+  .lang-btn[data-lang="en"],    .caption-btn[data-lang="en"]    { --c: var(--en); }
+  .lang-btn[data-lang="es"],    .caption-btn[data-lang="es"]    { --c: var(--es); }
+  .lang-btn[data-lang="ht"],    .caption-btn[data-lang="ht"]    { --c: var(--ht); }
+  .lang-btn[data-lang="pt"],    .caption-btn[data-lang="pt"]    { --c: var(--pt); }
+  .lang-btn[data-lang="zh"],    .caption-btn[data-lang="zh"]    { --c: var(--zh); }
+  .lang-btn.active, .caption-btn.active {
     background: var(--c);
     color: #fff;
   }
+  .caption-btn:disabled { opacity: 0.35; cursor: default; }
 
+  /* ── Controls (row 1 right) ── */
   #controls {
     display: flex;
     align-items: center;
@@ -86,7 +114,7 @@
     flex-shrink: 0;
   }
 
-.ctrl-btn {
+  .ctrl-btn {
     padding: 4px 12px;
     border-radius: 6px;
     border: 1px solid var(--border);
@@ -115,6 +143,38 @@
     50%       { opacity: 0.35; }
   }
 
+  /* ── Session ID & listener link ── */
+  #session-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  #session-id-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #aaa;
+  }
+  #session-id-value {
+    font-family: monospace;
+    font-size: 16px;
+    font-weight: 700;
+    color: #444;
+    letter-spacing: 0.12em;
+  }
+  #listener-link {
+    font-size: 11px;
+    color: #999;
+    text-decoration: none;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 2px 7px;
+  }
+  #listener-link:hover { background: #f5f5f5; }
+
   /* ── Grid ── */
   #grid {
     position: fixed;
@@ -122,8 +182,8 @@
     bottom: var(--bar-h);
     left: 0; right: 0;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
+    grid-template-columns: 1fr;
+    /* grid-template-rows set dynamically by JS */
     gap: 0;
   }
 
@@ -131,8 +191,8 @@
     border: 1px solid var(--border);
     border-left: 3px solid var(--accent);
     border-radius: 8px;
-    margin: 6px;
-    padding: 14px 18px 14px 16px;
+    margin: 4px 6px;
+    padding: 10px 18px 10px 16px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -142,13 +202,14 @@
   .panel[data-lang="es"] { --accent: var(--es); }
   .panel[data-lang="ht"] { --accent: var(--ht); }
   .panel[data-lang="pt"] { --accent: var(--pt); }
+  .panel[data-lang="zh"] { --accent: var(--zh); }
 
   .panel-tag {
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.06em;
     color: var(--accent);
-    margin-bottom: 10px;
+    margin-bottom: 6px;
     flex-shrink: 0;
   }
 
@@ -157,7 +218,7 @@
     flex-direction: column;
     justify-content: flex-end;
     flex: 1;
-    gap: 6px;
+    gap: 4px;
     overflow: hidden;
   }
 
@@ -206,94 +267,59 @@
     flex: 1;
   }
 
-  #lang-section {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    flex: 1;
-  }
-
-  #lang-label {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    color: #999;
-    text-transform: uppercase;
-  }
-
   /* ── Fullscreen hides header ── */
   :fullscreen #header { display: none; }
   :-webkit-full-screen #header { display: none; }
-
   :fullscreen #grid { top: 0; }
   :-webkit-full-screen #grid { top: 0; }
 
   /* ── Hidden header state ── */
   body.header-hidden #header { display: none; }
   body.header-hidden #grid { top: 0; }
-
-  /* ── Session ID ── */
-  #session-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-    font-size: 12px;
-    color: #999;
-  }
-  #session-id-label {
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-size: 10px;
-  }
-  #session-id-value {
-    font-family: monospace;
-    font-size: 16px;
-    font-weight: 700;
-    color: #444;
-    letter-spacing: 0.12em;
-  }
-  #listener-link {
-    font-size: 11px;
-    color: #999;
-    text-decoration: none;
-    border: 1px solid #ddd;
-    border-radius: 5px;
-    padding: 2px 7px;
-  }
-  #listener-link:hover { background: #f5f5f5; }
 </style>
 </head>
 <body>
 
 <!-- Header -->
 <div id="header">
-  <div id="app-title">Live Captions</div>
 
-  <div id="lang-section">
-    <span id="lang-label">Toggle spoken language</span>
-    <div id="lang-toggle">
-      <button class="lang-btn active" data-lang="en">EN</button>
-      <button class="lang-btn" data-lang="es">ES</button>
-      <button class="lang-btn" data-lang="ht">HT</button>
-      <button class="lang-btn" data-lang="pt">PT</button>
+  <!-- Row 1: title, session ID, controls -->
+  <div id="header-row1">
+    <div id="app-title">Live Captions</div>
+    <div id="session-info">
+      <span id="session-id-label">Session</span>
+      <span id="session-id-value">——————</span>
+      <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
+    </div>
+    <div id="controls">
+      <button class="ctrl-btn" id="start-btn">Start</button>
+      <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
+      <button class="ctrl-btn" id="fs-btn">⛶</button>
+      <div id="status-dot"></div>
     </div>
   </div>
 
-  <div id="session-info">
-    <span id="session-id-label">Session</span>
-    <span id="session-id-value">——————</span>
-    <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
+  <!-- Row 2: spoken language + caption toggles -->
+  <div id="header-row2">
+    <div class="lang-group">
+      <span class="lang-group-label">Spoken</span>
+      <div id="lang-toggle">
+        <button class="lang-btn active" data-lang="en">EN</button>
+        <button class="lang-btn" data-lang="es">ES</button>
+        <button class="lang-btn" data-lang="ht">HT</button>
+        <button class="lang-btn" data-lang="pt">PT</button>
+        <button class="lang-btn" data-lang="zh">ZH</button>
+      </div>
+    </div>
+    <div id="lang-divider"></div>
+    <div class="lang-group">
+      <span class="lang-group-label">Captions</span>
+      <div id="caption-toggle">
+        <!-- rendered by JS -->
+      </div>
+    </div>
   </div>
 
-  <div id="controls">
-    <button class="ctrl-btn" id="start-btn">Start</button>
-    <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
-    <button class="ctrl-btn" id="fs-btn">⛶</button>
-    <div id="status-dot"></div>
-  </div>
 </div>
 
 <!-- Caption grid -->
@@ -314,6 +340,10 @@
     <div class="panel-tag">PT</div>
     <div class="panel-lines" id="lines-pt"></div>
   </div>
+  <div class="panel" data-lang="zh">
+    <div class="panel-tag">ZH</div>
+    <div class="panel-lines" id="lines-zh"></div>
+  </div>
 </div>
 
 <!-- Bottom bar -->
@@ -325,7 +355,7 @@
 
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
-const ALL_LANGS = ['en', 'es', 'ht', 'pt'];
+const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh'];
 const GLADIA_CONFIG_BASE = {
   encoding: 'wav/pcm',
   sample_rate: 16000,
@@ -342,10 +372,21 @@ const GLADIA_CONFIG_BASE = {
   },
 };
 
+// ── Profanity filter ───────────────────────────────────────────────────────
+const _BLOCK_WORDS = [
+  'motherfuck', 'cocksucker', 'bullshit', 'asshole', 'asswipe', 'jackass',
+  'ass', 'fuck', 'shit', 'bitch', 'cunt', 'cock', 'dick', 'pussy',
+  'faggot', 'nigger', 'nigga', 'whore', 'slut', 'butthole', 'prick', 'piss',
+].sort((a, b) => b.length - a.length);
+const _BLOCK_RE = new RegExp(
+  '\\b(' + _BLOCK_WORDS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\w*',
+  'gi'
+);
+function filterText(s) { return s.replace(_BLOCK_RE, ' '); }
+
 // ── State ──────────────────────────────────────────────────────────────────
 let selectedLang = 'en';
 let ws = null;
-let mediaRecorder = null;
 let audioContext = null;
 let scriptProcessor = null;
 let sourceNode = null;
@@ -353,10 +394,13 @@ let micStream = null;
 let isRunning = false;
 let reconnectTimer = null;
 
-// Per-panel history: array of up to 3 committed lines
-const history = { en: [], es: [], ht: [], pt: [] };
-// Current partial text per panel (only source panel uses it)
-const partials = { en: '', es: '', ht: '', pt: '' };
+// Which translation languages are enabled (panels shown, sent to Gladia)
+// Persists across source language changes
+const translationEnabled = { en: true, es: true, ht: true, pt: true, zh: true };
+
+// Per-panel history and partials
+const history  = { en: [], es: [], ht: [], pt: [], zh: [] };
+const partials = { en: '', es: '', ht: '', pt: '', zh: '' };
 
 // ── UI refs ────────────────────────────────────────────────────────────────
 const startBtn      = document.getElementById('start-btn');
@@ -366,18 +410,52 @@ const statusDot     = document.getElementById('status-dot');
 const bottomPartial = document.getElementById('bottom-partial');
 const sessionIdEl   = document.getElementById('session-id-value');
 
-// ── Language toggle ────────────────────────────────────────────────────────
+// ── Grid & caption toggles ─────────────────────────────────────────────────
+function getActiveLangs() {
+  // Source always first, then enabled translations in ALL_LANGS order
+  return ALL_LANGS.filter(l => l === selectedLang || (l !== selectedLang && translationEnabled[l]));
+}
+
+function updateGrid() {
+  const active = getActiveLangs();
+  const grid = document.getElementById('grid');
+  grid.style.gridTemplateRows = `repeat(${active.length}, 1fr)`;
+  ALL_LANGS.forEach(lang => {
+    const panel = document.querySelector(`.panel[data-lang="${lang}"]`);
+    panel.style.display = active.includes(lang) ? 'flex' : 'none';
+  });
+}
+
+function renderCaptionToggles() {
+  const container = document.getElementById('caption-toggle');
+  container.innerHTML = '';
+  ALL_LANGS.filter(l => l !== selectedLang).forEach(lang => {
+    const btn = document.createElement('button');
+    btn.className = 'caption-btn' + (translationEnabled[lang] ? ' active' : '');
+    btn.dataset.lang = lang;
+    btn.textContent = lang.toUpperCase();
+    btn.disabled = isRunning;
+    btn.addEventListener('click', () => {
+      if (isRunning) return;
+      translationEnabled[lang] = !translationEnabled[lang];
+      btn.classList.toggle('active', translationEnabled[lang]);
+      updateGrid();
+    });
+    container.appendChild(btn);
+  });
+}
+
+// ── Language toggle (spoken) ───────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const lang = btn.dataset.lang;
-    if (lang === selectedLang) return;
+    if (lang === selectedLang || isRunning) return;
     selectedLang = lang;
-    document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
-
-    if (isRunning) {
-      // Silent reconnect
-      stopSession(false).then(() => startSession());
-    }
+    document.querySelectorAll('.lang-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.lang === lang)
+    );
+    renderCaptionToggles();
+    updateGrid();
   });
 });
 
@@ -406,28 +484,18 @@ function renderPanel(lang) {
   const container = document.getElementById('lines-' + lang);
   const h = history[lang];
   const partial = (lang === selectedLang) ? partials[lang] : '';
-  const lines = [];
-
-  // Build from oldest to newest (max 3 committed)
   const kept = h.slice(-3);
-  kept.forEach((text, i) => {
-    const fromEnd = kept.length - 1 - i; // 0 = newest committed
-    lines.push({ text, fromEnd });
-  });
-
   let html = '';
 
-  // Older committed lines
-  lines.forEach(({ text, fromEnd }) => {
+  kept.forEach((text, i) => {
+    const fromEnd = kept.length - 1 - i;
     let cls;
     if (partial) {
-      // partial is "current" so committed lines shift
-      if (fromEnd === 0) cls = 'line line-prev';
-      else               cls = 'line line-older';
+      cls = fromEnd === 0 ? 'line line-prev' : 'line line-older';
     } else {
-      if (fromEnd === 0) cls = 'line line-current';
+      if (fromEnd === 0)      cls = 'line line-current';
       else if (fromEnd === 1) cls = 'line line-prev';
-      else               cls = 'line line-older';
+      else                    cls = 'line line-older';
     }
     html += `<div class="${cls}">${escHtml(text)}</div>`;
   });
@@ -444,18 +512,19 @@ function escHtml(s) {
 }
 
 function commitLine(lang, text) {
-  if (!text || !text.trim()) return;
-  history[lang].push(text.trim());
+  const filtered = filterText(text);
+  if (!filtered || !filtered.trim()) return;
+  history[lang].push(filtered.trim());
   if (history[lang].length > 3) history[lang].shift();
   partials[lang] = '';
   renderPanel(lang);
 }
 
 function setPartial(lang, text) {
-  if (lang !== selectedLang) return; // no partials on translation panels
-  partials[lang] = text;
+  if (lang !== selectedLang) return;
+  partials[lang] = filterText(text);
   renderPanel(lang);
-  bottomPartial.textContent = text;
+  bottomPartial.textContent = partials[lang];
 }
 
 function clearPanels() {
@@ -470,26 +539,18 @@ function clearPanels() {
 // ── Session management ────────────────────────────────────────────────────
 async function startSession() {
   if (isRunning) return;
-
   clearReconnectTimer();
 
-  // Build config
-  const targetLangs = ALL_LANGS.filter(l => l !== selectedLang);
+  const targetLangs = ALL_LANGS.filter(l => l !== selectedLang && translationEnabled[l]);
   const config = JSON.parse(JSON.stringify(GLADIA_CONFIG_BASE));
-  config.language_config = {
-    languages: [selectedLang],
-    code_switching: false
-  };
+  config.language_config = { languages: [selectedLang], code_switching: false };
   config.realtime_processing.translation_config.target_languages = targetLangs;
 
-  // Init session with Gladia
   let gladiaWsUrl;
   try {
     const resp = await fetch('/church_transcription/init-session', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
     });
     if (!resp.ok) {
@@ -505,7 +566,6 @@ async function startSession() {
     return;
   }
 
-  // Get mic
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch (err) {
@@ -517,15 +577,16 @@ async function startSession() {
   startBtn.disabled = true;
   stopBtn.disabled = false;
   statusDot.classList.add('live');
+  // Disable config controls while running
+  document.querySelectorAll('.lang-btn').forEach(b => b.disabled = true);
+  renderCaptionToggles(); // re-renders with disabled=true
   clearPanels();
 
-  // Open backend WebSocket
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', () => {
-    // First message: Gladia URL
     ws.send(gladiaWsUrl);
     startAudio();
   });
@@ -539,10 +600,7 @@ async function startSession() {
 
   ws.addEventListener('close', (evt) => {
     if (!isRunning) return;
-    // Unexpected close — reconnect
-    if (evt.code !== 1000) {
-      scheduleReconnect();
-    }
+    if (evt.code !== 1000) scheduleReconnect();
   });
 
   ws.addEventListener('error', () => {
@@ -554,15 +612,11 @@ async function stopSession(userInitiated = true) {
   isRunning = false;
   clearReconnectTimer();
 
-  // Send terminate to Gladia via ws
   if (ws && ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.send(JSON.stringify({ type: 'stop_recording' }));
-    } catch (_) {}
+    try { ws.send(JSON.stringify({ type: 'stop_recording' })); } catch (_) {}
     setTimeout(() => { try { ws.close(1000); } catch (_) {} }, 200);
   }
   ws = null;
-
   stopAudio();
 
   if (userInitiated) {
@@ -570,6 +624,9 @@ async function stopSession(userInitiated = true) {
     stopBtn.disabled = true;
     statusDot.classList.remove('live');
     bottomPartial.textContent = '';
+    // Re-enable config controls
+    document.querySelectorAll('.lang-btn').forEach(b => b.disabled = false);
+    renderCaptionToggles();
   }
 }
 
@@ -579,7 +636,7 @@ function scheduleReconnect() {
   if (ws) { try { ws.close(); } catch (_) {} ws = null; }
   reconnectTimer = setTimeout(() => {
     if (!isRunning) return;
-    isRunning = false; // reset so startSession can proceed
+    isRunning = false;
     startSession();
   }, 1000);
 }
@@ -593,17 +650,12 @@ function startAudio() {
   const TARGET_SR = 16000;
   audioContext = new AudioContext({ sampleRate: TARGET_SR });
   sourceNode = audioContext.createMediaStreamSource(micStream);
-
-  // 4096 samples @ 16kHz ≈ 256ms chunks
   scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
 
   scriptProcessor.onaudioprocess = (event) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const float32 = event.inputBuffer.getChannelData(0);
-    const int16 = float32ToInt16(float32);
-    // Prepend WAV header for first chunk, or send raw PCM
-    // Gladia wav/pcm encoding expects raw PCM 16-bit little-endian
-    ws.send(int16.buffer);
+    ws.send(float32ToInt16(float32).buffer);
   };
 
   sourceNode.connect(scriptProcessor);
@@ -631,11 +683,9 @@ function handleGladiaMessage(msg) {
   const type = msg.type;
 
   if (type === 'transcript') {
-    const data = msg.data || {};
-    const utterance = data.utterance || {};
+    const utterance = (msg.data || {}).utterance || {};
     const text = utterance.text || '';
-    const isFinal = utterance.is_final === true || data.is_final === true;
-
+    const isFinal = utterance.is_final === true || (msg.data || {}).is_final === true;
     if (isFinal) {
       commitLine(selectedLang, text);
       bottomPartial.textContent = '';
@@ -654,11 +704,11 @@ function handleGladiaMessage(msg) {
     }
     return;
   }
-
 }
 
-// ── Init render ───────────────────────────────────────────────────────────
-ALL_LANGS.forEach(renderPanel);
+// ── Init ──────────────────────────────────────────────────────────────────
+renderCaptionToggles();
+updateGrid();
 </script>
 </body>
 </html>

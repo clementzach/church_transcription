@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import queue
 import secrets
@@ -19,19 +20,38 @@ sock = Sock(app)
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-TRANSLATION_LANGS = ['es', 'ht', 'pt']
+TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh']
 
 # Voice and instructions per language for gpt-4o-mini-tts
 TTS_VOICES = {
     'es': 'nova',
     'pt': 'shimmer',
     'ht': 'alloy',
+    'zh': 'echo',
 }
 TTS_INSTRUCTIONS = {
     'es': 'Speak naturally and clearly in Spanish.',
     'pt': 'Fale de forma natural e clara em português.',
     'ht': 'Ou pale kreyòl tankou yon natif natal',
+    'zh': 'Speak naturally and clearly in Mandarin Chinese (普通话).',
 }
+
+# ── Profanity filter ────────────────────────────────────────────────────────
+# Sorted longest-first so compound words match before their roots
+_BLOCK_WORDS = sorted([
+    'motherfuck', 'cocksucker', 'bullshit', 'asshole', 'asswipe', 'jackass',
+    'ass', 'fuck', 'shit', 'bitch', 'cunt', 'cock', 'dick', 'pussy',
+    'faggot', 'nigger', 'nigga', 'whore', 'slut', 'butthole', 'prick', 'piss',
+], key=len, reverse=True)
+
+_BLOCK_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(w) for w in _BLOCK_WORDS) + r')\w*',
+    re.IGNORECASE,
+)
+
+def _filter_text(text: str) -> str:
+    return _BLOCK_RE.sub(' ', text)
+
 
 # ── Session state (one active recording session at a time) ─────────────────
 _lock = threading.Lock()
@@ -74,13 +94,15 @@ def _tts_worker(lang):
         if text is None:
             break
 
+        filtered = _filter_text(text)
+
         # First send the text so the listener can display it immediately
         with _lock:
             listeners = list(listener_registry.get(lang, []))
         dead = []
         for ws_conn in listeners:
             try:
-                ws_conn.send(json.dumps({'type': 'text', 'text': text}))
+                ws_conn.send(json.dumps({'type': 'text', 'text': filtered}))
             except Exception:
                 dead.append(ws_conn)
         if dead:
@@ -101,7 +123,7 @@ def _tts_worker(lang):
             response = openai_client.audio.speech.create(
                 model='gpt-4o-mini-tts',
                 voice=TTS_VOICES[lang],
-                input=text,
+                input=filtered,
                 instructions=TTS_INSTRUCTIONS[lang],
                 response_format='mp3',
             )
