@@ -524,10 +524,10 @@ async function startSession() {
   ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
   ws.binaryType = 'arraybuffer';
 
-  ws.addEventListener('open', () => {
-    // First message: Gladia URL
+  ws.addEventListener('open', async () => {
+    console.log('[ws] Backend WebSocket open');
     ws.send(gladiaWsUrl);
-    startAudio();
+    await startAudio();
   });
 
   ws.addEventListener('message', (evt) => {
@@ -538,14 +538,15 @@ async function startSession() {
   });
 
   ws.addEventListener('close', (evt) => {
+    console.warn('[ws] Backend WebSocket closed', evt.code, evt.reason);
     if (!isRunning) return;
-    // Unexpected close — reconnect
     if (evt.code !== 1000) {
       scheduleReconnect();
     }
   });
 
-  ws.addEventListener('error', () => {
+  ws.addEventListener('error', (evt) => {
+    console.error('[ws] Backend WebSocket error', evt);
     if (isRunning) scheduleReconnect();
   });
 }
@@ -589,9 +590,13 @@ function clearReconnectTimer() {
 }
 
 // ── Audio capture ─────────────────────────────────────────────────────────
-function startAudio() {
+async function startAudio() {
   const TARGET_SR = 16000;
   audioContext = new AudioContext({ sampleRate: TARGET_SR });
+  if (audioContext.state === 'suspended') {
+    await audioContext.resume();
+  }
+  console.log('[audio] AudioContext state:', audioContext.state, 'sampleRate:', audioContext.sampleRate);
   sourceNode = audioContext.createMediaStreamSource(micStream);
 
   // 4096 samples @ 16kHz ≈ 256ms chunks
