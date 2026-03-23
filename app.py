@@ -157,7 +157,7 @@ def init_session():
         json=config,
         timeout=10,
     )
-    if resp.status_code == 200:
+    if resp.ok:
         session_id = _generate_session_id()
         with _lock:
             current_session_id = session_id
