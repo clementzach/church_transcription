@@ -48,6 +48,10 @@ def _generate_session_id():
 
 
 def _enqueue_tts(lang, text):
+    # Skip entirely if no listeners are connected for this language
+    with _lock:
+        if not listener_registry.get(lang):
+            return
     q = tts_queues[lang]
     try:
         q.put_nowait(text)
@@ -86,6 +90,11 @@ def _tts_worker(lang):
                         listener_registry[lang].remove(d)
                     except ValueError:
                         pass
+
+        # Skip API call if all listeners disconnected while text was queued
+        with _lock:
+            if not listener_registry.get(lang):
+                continue
 
         # Then generate and send audio
         try:
