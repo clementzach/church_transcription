@@ -5,3 +5,4 @@ requests
 websocket-client
 gunicorn
 gevent
+openai

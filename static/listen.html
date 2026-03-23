@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Translation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --en: #3b82f6;
+    --es: #f97316;
+    --ht: #22c55e;
+    --pt: #a855f7;
+    --border: #e5e5e5;
+    --bg: #ffffff;
+    --text: #111111;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── Login screen ── */
+  #login-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 28px;
+    padding: 40px;
+  }
+
+  #login-title {
+    font-size: 22px;
+    font-weight: 600;
+  }
+
+  #login-form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+    max-width: 340px;
+  }
+
+  .field-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  #session-id-input {
+    width: 100%;
+    text-align: center;
+    font-family: monospace;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  #session-id-input:focus { border-color: #aaa; }
+
+  #lang-choice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+  }
+
+  #lang-buttons {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .lang-opt {
+    flex: 1;
+    padding: 10px 4px;
+    border-radius: 8px;
+    border: 2px solid var(--c);
+    background: transparent;
+    color: var(--c);
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .lang-opt[data-lang="es"] { --c: var(--es); }
+  .lang-opt[data-lang="ht"] { --c: var(--ht); }
+  .lang-opt[data-lang="pt"] { --c: var(--pt); }
+  .lang-opt.selected {
+    background: var(--c);
+    color: #fff;
+  }
+
+  #lang-names {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+  }
+  .lang-name {
+    flex: 1;
+    text-align: center;
+    font-size: 10px;
+    color: #aaa;
+  }
+
+  #connect-btn {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: none;
+    background: #111;
+    color: #fff;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #connect-btn:hover { background: #333; }
+  #connect-btn:disabled { background: #ccc; cursor: default; }
+
+  #login-error {
+    font-size: 13px;
+    color: #e44;
+    min-height: 18px;
+    text-align: center;
+  }
+
+  /* ── Listener screen ── */
+  #listener-screen {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  #listen-header {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  #listen-lang-tag {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+  }
+
+  #listen-session-tag {
+    font-size: 11px;
+    color: #bbb;
+    font-family: monospace;
+    letter-spacing: 0.08em;
+  }
+
+  #audio-indicator {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #bbb;
+  }
+
+  #audio-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ccc;
+    transition: background 0.2s;
+  }
+  #audio-dot.playing {
+    background: #22c55e;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+  }
+
+  /* ── Caption panel ── */
+  #caption-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 20px 28px 28px;
+    border-left: 4px solid var(--accent);
+    margin: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    overflow: hidden;
+  }
+
+  #panel-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+  }
+
+  .line {
+    line-height: 1.35;
+    word-break: break-word;
+    animation: fadein 0.3s ease;
+  }
+  @keyframes fadein {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .line-current { font-size: 32px; font-weight: 500; opacity: 1; }
+  .line-prev    { font-size: 20px; opacity: 0.45; }
+  .line-older   { font-size: 15px; opacity: 0.20; }
+</style>
+</head>
+<body>
+
+<!-- Login screen -->
+<div id="login-screen">
+  <div id="login-title">Live Translation</div>
+
+  <div id="login-form">
+    <div style="width:100%">
+      <label class="field-label" for="session-id-input">Session ID</label>
+      <input id="session-id-input" type="text" maxlength="6" placeholder="XXXXXX" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div id="lang-choice">
+      <label class="field-label">Language</label>
+      <div id="lang-buttons">
+        <button class="lang-opt" data-lang="es">ES</button>
+        <button class="lang-opt" data-lang="ht">HT</button>
+        <button class="lang-opt" data-lang="pt">PT</button>
+      </div>
+      <div id="lang-names">
+        <span class="lang-name">Spanish</span>
+        <span class="lang-name">Haitian Creole</span>
+        <span class="lang-name">Portuguese</span>
+      </div>
+    </div>
+
+    <div id="login-error"></div>
+
+    <button id="connect-btn" disabled>Connect</button>
+  </div>
+</div>
+
+<!-- Listener screen -->
+<div id="listener-screen">
+  <div id="listen-header">
+    <span id="listen-lang-tag"></span>
+    <span id="listen-session-tag"></span>
+    <div id="audio-indicator">
+      <div id="audio-dot"></div>
+      <span id="audio-label">Audio</span>
+    </div>
+  </div>
+
+  <div id="caption-panel">
+    <div id="panel-lines"></div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7' };
+const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese' };
+
+let selectedLang = null;
+let ws = null;
+const history = [];       // committed lines, max 3
+
+// Audio queue
+const audioQueue = [];
+let isPlaying = false;
+
+// ── Login UI ───────────────────────────────────────────────────────────────
+const sessionInput = document.getElementById('session-id-input');
+const connectBtn   = document.getElementById('connect-btn');
+const loginError   = document.getElementById('login-error');
+const langButtons  = document.querySelectorAll('.lang-opt');
+
+sessionInput.addEventListener('input', () => {
+  sessionInput.value = sessionInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  updateConnectBtn();
+});
+
+langButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    langButtons.forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    selectedLang = btn.dataset.lang;
+    updateConnectBtn();
+  });
+});
+
+function updateConnectBtn() {
+  connectBtn.disabled = !(sessionInput.value.length === 6 && selectedLang);
+}
+
+connectBtn.addEventListener('click', connect);
+
+// ── Connection ─────────────────────────────────────────────────────────────
+function connect() {
+  const sessionId = sessionInput.value.trim();
+  loginError.textContent = '';
+  connectBtn.disabled = true;
+  connectBtn.textContent = 'Connecting…';
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/church_transcription/listen-stream`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ session_id: sessionId, language: selectedLang }));
+  });
+
+  ws.addEventListener('message', evt => {
+    if (evt.data instanceof ArrayBuffer) {
+      enqueueAudio(evt.data);
+      return;
+    }
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+
+    if (msg.type === 'error') {
+      showError(msg.message || 'Connection failed');
+      ws.close();
+      return;
+    }
+    if (msg.type === 'text') {
+      commitLine(msg.text);
+    }
+  });
+
+  ws.addEventListener('close', evt => {
+    if (evt.code === 1000) return; // clean close
+    if (document.getElementById('listener-screen').style.display !== 'none') {
+      // Already on listener screen — show disconnected state
+      document.getElementById('listen-lang-tag').textContent += '  (disconnected)';
+    } else {
+      showError('Could not connect. Check the session ID.');
+    }
+  });
+
+  ws.addEventListener('error', () => {
+    showError('Connection error. Try again.');
+  });
+
+  // Switch to listener screen on first successful text/audio message
+  // (we do this when we get the first message, treating open as confirmation)
+  ws.addEventListener('open', () => {
+    // Will show listener screen after server confirms (first text/audio)
+  });
+
+  // Show listener screen once WebSocket opens (server will close with error if invalid)
+  setTimeout(() => {
+    if (ws && ws.readyState === WebSocket.OPEN && !loginError.textContent) {
+      showListenerScreen(sessionId);
+    }
+  }, 600);
+}
+
+function showError(msg) {
+  loginError.textContent = msg;
+  connectBtn.disabled = false;
+  connectBtn.textContent = 'Connect';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('listener-screen').style.display = 'none';
+}
+
+function showListenerScreen(sessionId) {
+  document.getElementById('login-screen').style.display = 'none';
+  const ls = document.getElementById('listener-screen');
+  ls.style.display = 'flex';
+
+  const color = LANG_COLORS[selectedLang];
+  document.getElementById('listen-lang-tag').textContent = LANG_NAMES[selectedLang];
+  document.getElementById('listen-lang-tag').style.color = color;
+  document.getElementById('caption-panel').style.borderLeftColor = color;
+  document.getElementById('listen-session-tag').textContent = sessionId;
+}
+
+// ── Caption display ────────────────────────────────────────────────────────
+function commitLine(text) {
+  if (!text || !text.trim()) return;
+
+  // Show listener screen if not already (handles race where text arrives before timeout)
+  if (document.getElementById('listener-screen').style.display === 'none') {
+    showListenerScreen(sessionInput.value);
+  }
+
+  history.push(text.trim());
+  if (history.length > 3) history.shift();
+  renderLines();
+}
+
+function renderLines() {
+  const container = document.getElementById('panel-lines');
+  const kept = history.slice(-3);
+  let html = '';
+  kept.forEach((text, i) => {
+    const fromEnd = kept.length - 1 - i;
+    let cls;
+    if (fromEnd === 0)      cls = 'line line-current';
+    else if (fromEnd === 1) cls = 'line line-prev';
+    else                    cls = 'line line-older';
+    html += `<div class="${cls}">${escHtml(text)}</div>`;
+  });
+  container.innerHTML = html;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Audio queue ────────────────────────────────────────────────────────────
+function enqueueAudio(buffer) {
+  // Drop oldest queued item if behind by more than 1
+  if (audioQueue.length > 1) audioQueue.shift();
+  audioQueue.push(buffer);
+  if (!isPlaying) playNext();
+}
+
+function playNext() {
+  if (audioQueue.length === 0) {
+    isPlaying = false;
+    setAudioDot(false);
+    return;
+  }
+  isPlaying = true;
+  setAudioDot(true);
+
+  const buffer = audioQueue.shift();
+  const blob = new Blob([buffer], { type: 'audio/mpeg' });
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.onended = () => {
+    URL.revokeObjectURL(url);
+    playNext();
+  };
+  audio.onerror = () => {
+    URL.revokeObjectURL(url);
+    playNext();
+  };
+  audio.play().catch(() => playNext());
+}
+
+function setAudioDot(playing) {
+  const dot = document.getElementById('audio-dot');
+  const label = document.getElementById('audio-label');
+  if (playing) {
+    dot.classList.add('playing');
+    label.textContent = 'Playing';
+  } else {
+    dot.classList.remove('playing');
+    label.textContent = 'Audio';
+  }
+}
+</script>
+</body>
+</html>
