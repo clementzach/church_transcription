@@ -1,0 +1,20 @@
+# Mandarin Chinese profanity word list
+# Handled via substring matching (no word boundaries in Chinese text)
+操
+肏
+他妈的
+妈的
+我操
+妈逼
+傻逼
+屌
+狗屎
+混蛋
+王八蛋
+日你妈
+草泥马
+狗娘养的
+去你妈的
+臭逼
+妈了个逼
+杂种

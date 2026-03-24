@@ -1,0 +1,61 @@
+# Spanish profanity word list
+# Slurs and strong obscenities only — no clinical/identity terms
+puta
+puto
+putos
+putas
+coño
+joder
+jodido
+jodida
+jodidos
+mierda
+cabrón
+cabrona
+cabrones
+maricón
+maricona
+hostia
+hostias
+verga
+chingar
+chingada
+chingado
+chingados
+chingadera
+chingaderas
+pendejo
+pendeja
+pendejos
+culero
+culera
+culo
+cagar
+cagada
+follar
+follado
+polla
+gilipollas
+hijoputa
+hijo de puta
+hija de puta
+mamón
+mamona
+zorra
+zorras
+putada
+putazo
+cojonudo
+cojones
+pito
+gonorrea
+mamar
+pajero
+pajera
+pajear
+pinche
+chinga tu madre
+que te jodan
+vete a la mierda
+vete al carajo
+carajo

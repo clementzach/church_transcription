@@ -1,0 +1,45 @@
+# Portuguese profanity word list
+# Sourced from LDNOOBW project, filtered to remove clinical/identity terms
+bastardo
+bicha
+biscate
+boceta
+bosta
+bumbum
+cabrão
+cacete
+cagar
+cagada
+caralho
+cona
+cu
+esporra
+filho da puta
+foda
+foda-se
+foder
+fodido
+fodida
+grelho
+merda
+paneleiro
+pau
+peidar
+peido
+pinto
+porra
+puta
+puto
+puta que pariu
+puta que te pariu
+sacanagem
+vai-te foder
+vai tomar no cu
+veado
+vadia
+xana
+xochota
+arrombado
+baba ovo
+boquete
+porra de uma égua

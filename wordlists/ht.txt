@@ -1,0 +1,16 @@
+# Haitian Creole profanity word list
+# Manually curated — no established package covers HT
+# NOTE: This list is intentionally small; expand with input from native speakers
+kaka
+pipi
+bouda
+manman ou
+manman m
+kokoye
+bòf
+zizi
+pete
+kochon sal
+salòp
+manman chyen
+chyen sa

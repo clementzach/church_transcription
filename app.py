@@ -2,6 +2,7 @@ from gevent import monkey
 monkey.patch_all()
 
 import os
+import re
 import json
 import logging
 import queue
@@ -14,6 +15,7 @@ from flask_sock import Sock
 from dotenv import load_dotenv
 import websocket
 from openai import OpenAI
+from better_profanity import profanity as _bp_filter
 
 load_dotenv()
 
@@ -43,6 +45,62 @@ TTS_INSTRUCTIONS = {
     'pt': 'Fale de forma natural e clara em português.',
     'ht': 'Ou pale kreyòl tankou yon natif natal',
 }
+
+# ── Profanity filter ────────────────────────────────────────────────────────
+
+def _load_wordlist(filename: str) -> list:
+    """Load a word list file, skipping blank lines and # comments (both full-line and inline)."""
+    path = os.path.join(os.path.dirname(__file__), 'wordlists', filename)
+    try:
+        words = []
+        with open(path, encoding='utf-8') as f:
+            for ln in f:
+                word = ln.split('#')[0].strip()  # strip inline comments
+                if word:
+                    words.append(word)
+        return words
+    except FileNotFoundError:
+        log.warning("Word list not found: %s", filename)
+        return []
+
+# better-profanity handles EN, ES, PT, HT via word-boundary-aware matching.
+# It uses whole-word matching so "assessment" is never flagged for "ass".
+#
+# Load whitelist first so biblical vocabulary (hell, God, ass/donkey, cock/rooster,
+# prick/goad, lust, whore, bastard, loins, etc.) is never censored.
+_whitelist = _load_wordlist('whitelist.txt')
+_bp_filter.load_censor_words(whitelist_words=_whitelist)
+
+_custom_words = (
+    _load_wordlist('es.txt') +
+    _load_wordlist('pt.txt') +
+    _load_wordlist('ht.txt')
+)
+_bp_filter.add_censor_words(_custom_words)
+log.info(
+    "Profanity filter ready: %d EN built-in + %d multilingual custom words, %d whitelisted",
+    len(_bp_filter.CENSOR_WORDSET) - len(_custom_words),
+    len(_custom_words),
+    len(_whitelist),
+)
+
+# ZH: Chinese has no word boundaries, so use substring regex separately.
+_zh_words = _load_wordlist('zh.txt')
+_zh_re = re.compile('|'.join(re.escape(w) for w in _zh_words)) if _zh_words else None
+
+
+def _filter_text(text: str) -> str:
+    """Censor profanity across all supported languages.
+
+    Latin-script languages (EN, ES, PT, HT) use better-profanity which is
+    word-boundary aware — "assessment" and "classic" are never falsely flagged.
+    Mandarin uses substring matching on the ZH word list.
+    """
+    text = _bp_filter.censor(text, censor_char=' ')
+    if _zh_re:
+        text = _zh_re.sub(' ', text)
+    return text
+
 
 # ── Session state (one active recording session at a time) ─────────────────
 _lock = threading.Lock()
@@ -79,7 +137,8 @@ def _enqueue_tts(lang, text):
 
 
 def _tts_worker(lang):
-    """Background thread per language: calls OpenAI TTS and sends audio to listeners."""
+    """Background thread per language: calls OpenAI TTS and sends audio to listeners.
+    Text arriving here is already filtered by the relay; no re-filtering needed."""
     log.info("TTS worker started for lang=%s", lang)
     while True:
         text = tts_queues[lang].get()
@@ -244,26 +303,43 @@ def stream(browser_ws):
                 log.info("stream: Gladia closed connection")
                 break
             gladia_msgs += 1
-            # Relay to recorder browser (unchanged)
-            try:
-                browser_ws.send(raw)
-            except Exception as e:
-                log.warning("stream: browser send error: %s", e)
-                break
-            # Intercept committed translation messages to trigger TTS
+
+            # Parse the message, filter any text fields, then forward to browser.
+            # Filtering here means the recorder display and listeners all see clean text.
+            to_send = raw
             try:
                 msg = json.loads(raw)
                 msg_type = msg.get('type')
                 if gladia_msgs <= 5 or msg_type in ('transcript', 'translation'):
                     log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
-                if msg_type == 'translation':
+
+                if msg_type == 'transcript':
+                    utterance = (msg.get('data') or {}).get('utterance') or {}
+                    if utterance.get('text'):
+                        utterance['text'] = _filter_text(utterance['text'])
+                        to_send = json.dumps(msg)
+
+                elif msg_type == 'translation':
                     data = msg.get('data', {})
+                    translated = data.get('translated_utterance') or {}
+                    if translated.get('text'):
+                        translated['text'] = _filter_text(translated['text'])
+                        to_send = json.dumps(msg)
+                    # Enqueue filtered text for TTS/listener delivery
                     lang = (data.get('target_language') or '').lower()
-                    text = (data.get('translated_utterance') or {}).get('text', '')
+                    text = translated.get('text', '')
                     if lang in tts_queues and text:
                         _enqueue_tts(lang, text)
+
             except Exception:
-                pass
+                pass  # on any parse error, forward the original raw message
+
+            try:
+                browser_ws.send(to_send)
+            except Exception as e:
+                log.warning("stream: browser send error: %s", e)
+                break
+
     finally:
         log.info("stream: closing (audio_chunks=%d, gladia_msgs=%d)", audio_chunks, gladia_msgs)
         stop_event.set()

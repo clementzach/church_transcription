@@ -1,0 +1,33 @@
+# Whitelist — words that must never be censored.
+# All of the following appear in KJV scripture and/or are common religious terms.
+
+# Explicitly requested by user
+god
+hell
+damn
+
+# Common in Old/New Testament (KJV vocabulary)
+kill        # "thou shalt not kill" (Exodus 20:13)
+lust        # "whosoever looketh on a woman to lust after her" (Matthew 5:28)
+virgin      # Virgin Mary, Isaiah 7:14, etc.
+naked       # Genesis 3, multiple OT books
+womb        # extremely common throughout scripture
+sex         # used in modern discussions of scripture/chastity
+sexual      # same
+loins       # "gird up your loins", "fruit of his loins"
+piss        # 2 Kings 18:27 KJV
+pisseth     # archaic form also in 2 Kings KJV
+
+# KJV terms for donkey — Numbers 22 (Balaam's ass), Judges, etc.
+ass
+asses
+
+# Animals / objects sharing spelling with profanity
+cock        # "before the cock crow" (Matthew 26:34) — rooster
+prick       # "kick against the pricks" (Acts 9:5) — goad/thorn
+pricks      # plural form (same verse)
+
+# Strong but scriptural terms that appear in Bible prophecy and law
+whore       # "whore of Babylon" (Revelation 17), Proverbs
+bastard     # Deuteronomy 23:2 KJV
+breasts     # Song of Solomon, multiple books
