@@ -1,61 +1,115 @@
 # Spanish profanity word list
-# Slurs and strong obscenities only — no clinical/identity terms
-puta
-puto
-putos
-putas
-coño
+# Slurs and strong obscenities only.
+# Excludes: clinical/anatomical terms, identity terms, religious words.
+# Covers both Spain and Latin American dialects.
+
+# F-word equivalents
 joder
 jodido
 jodida
 jodidos
-mierda
-cabrón
-cabrona
-cabrones
-maricón
-maricona
-hostia
-hostias
-verga
-chingar
+jodidas
+follar
+follado
+follada
+chingar       # Mexico/Central America
 chingada
 chingado
 chingados
+chingadas
 chingadera
 chingaderas
+chinga tu madre
+coger         # vulgar in Latin America (means "to grab" in Spain — keep for LA coverage)
+cogido
+cogida
+
+# Shit
+mierda
+mierdas
+cagar
+cagada
+cagadas
+cagado
+
+# Bitch / whore
+puta
+puto
+putos
+putas
+putada
+putazo
+zorra
+zorras
+ramera
+furcia
+
+# C-word
+coño
+coñazo
+
+# Mother insults
+hijo de puta
+hija de puta
+hijoputa
+hijoputa
+chinga tu madre  # Mexico
+tu puta madre
+me cago en tu madre
+
+# D-word / genitalia
+verga
+polla
+pito
+picha
+cipote
+cojones
+huevos        # balls (vulgar)
 pendejo
 pendeja
 pendejos
+pendejadas
+
+# A-word / ass
+culo
 culero
 culera
-culo
-cagar
-cagada
-follar
-follado
-polla
-gilipollas
-hijoputa
-hijo de puta
-hija de puta
-mamón
-mamona
-zorra
-zorras
-putada
-putazo
-cojonudo
-cojones
-pito
-gonorrea
-mamar
+culeros
+
+# Masturbation
 pajero
 pajera
 pajear
-pinche
-chinga tu madre
-que te jodan
+paja
+
+# Slurs
+maricón
+maricona
+maricones
+mariconazo
+gonorrea      # used as slur in Colombia
+cabrón
+cabrona
+cabrones
+mamón
+mamona
+gilipollas
+subnormal
+imbécil       # mild but often vulgar in context
+
+# Compound insults
+hijo de la chingada
 vete a la mierda
 vete al carajo
 carajo
+hostia        # Eucharist wafer, BUT used as expletive in Spain — filter for safety
+hostias
+cojonudo      # "fucking great" (vulgar even when positive)
+me cago en dios  # blasphemous — filter
+me cago en la hostia  # blasphemous — filter
+
+# Drugs (in slur context)
+puto drogadicto
+
+# Pinche (Mexican expletive modifier)
+pinche

@@ -1,20 +1,51 @@
 # Mandarin Chinese profanity word list
-# Handled via substring matching (no word boundaries in Chinese text)
-操
-肏
+# Handled via substring matching (no word boundaries in Chinese text).
+# IMPORTANT: Avoid single characters with common non-vulgar uses.
+#   - 操 alone would match 体操 (gymnastics), 操场 (playground) → use specific phrases
+#   - 日 alone would match 日期 (date), 今日 (today) → DO NOT add as standalone
+#   - 干 alone would match countless common verbs → DO NOT add as standalone
+
+# F-word and derivatives (specific multi-character sequences only)
+肏          # archaic/explicit character, almost exclusively profane
+操你
+操他妈
+操你妈
+我操你
+去操
+卧槽        # "holy shit" internet slang, derived from profanity
+
+# Mother insults
 他妈的
 妈的
-我操
 妈逼
-傻逼
-屌
-狗屎
-混蛋
-王八蛋
-日你妈
-草泥马
-狗娘养的
-去你妈的
-臭逼
 妈了个逼
-杂种
+日你妈
+去你妈的
+你他妈
+
+# Genitalia
+傻逼        # stupid c-word
+臭逼
+狗逼
+烂逼
+屌毛        # pubic hair, vulgar
+臭屌
+
+# Compound insults
+狗屎        # dog shit
+混蛋        # bastard/jerk
+王八蛋      # strong insult (turtle egg = bastard)
+狗娘养的    # son of a bitch
+狗日的      # son of a bitch (alternate)
+杂种        # bastard/mixed breed (slur)
+臭婊子      # stinky bitch/whore
+婊子        # whore/bitch
+贱人        # lowly/cheap person (strong insult)
+死全家      # death curse on whole family
+滚你妈的蛋  # get the f*** out
+
+# Euphemisms that are always meant as profanity
+草泥马      # "Grass Mud Horse" - f*** your mother euphemism
+尼玛        # ni ma - euphemism for "your mother" in vulgar context
+泥马        # alternate euphemism
+妈卖逼      # extremely vulgar

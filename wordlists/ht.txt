@@ -1,16 +1,54 @@
 # Haitian Creole profanity word list
-# Manually curated — no established package covers HT
-# NOTE: This list is intentionally small; expand with input from native speakers
-kaka
-pipi
-bouda
-manman ou
-manman m
-kokoye
-bòf
-zizi
-pete
-kochon sal
-salòp
-manman chyen
-chyen sa
+# Manually curated — no established package covers Haitian Creole.
+# Haitian Creole shares roots with French; many terms are loanwords.
+
+# Excrement / bodily functions
+kaka        # shit/excrement
+pipi        # urine/pee
+pete        # fart
+krot        # shit/crap (informal)
+
+# Genitalia
+kokoye      # vagina (vulgar)
+koko        # vagina (vulgar)
+bòbòt       # vagina (vulgar)
+foukan      # vagina (vulgar)
+zizi        # penis (childish/vulgar depending on context)
+grenn       # testicle(s)
+bòl         # balls (testicles, vulgar)
+
+# Body parts used vulgarly
+bouda       # buttocks/ass
+
+# Sex acts
+fout        # fuck (from French "foutre")
+foute       # to fuck (conjugated)
+fouti       # fucked (past tense)
+baise       # fuck/have sex (French loanword, very vulgar)
+bèzwen      # not profane — DO NOT ADD
+
+# Slurs / strong insults
+bouzen      # whore/prostitute
+salòp       # slut/bitch (from French "salope")
+peten       # whore/bitch (from French "putain")
+malpwòp     # dirty/filthy (strong insult in context)
+bèt         # beast/stupid animal (used insultingly)
+vye bèt     # nasty beast
+reta        # retard (offensive slur)
+enbesil     # imbecile
+
+# Mother insults (specific phrases — "manman" alone means "mother" and is fine)
+manman ou   # your mother (vulgar)
+manman chyen # mother dog (motherf***)
+manman bèt  # mother beast (motherf***)
+manman sal  # dirty mother
+
+# Dog insults
+chyen sa    # that dog (strong insult)
+ti chyen    # little dog (insult)
+fout chyen  # dog f***
+
+# General strong insults
+kochon sal  # dirty pig
+sal bagay   # dirty thing
+derespektan # disrespectful (mild but context-dependent)

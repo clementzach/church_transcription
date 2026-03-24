@@ -1,45 +1,107 @@
 # Portuguese profanity word list
-# Sourced from LDNOOBW project, filtered to remove clinical/identity terms
-bastardo
-bicha
-biscate
-boceta
-bosta
-bumbum
-cabrão
-cacete
-cagar
-cagada
-caralho
-cona
-cu
-esporra
-filho da puta
+# Covers both Brazilian Portuguese (BR) and European Portuguese (PT).
+# Sourced from LDNOOBW project (filtered) + community additions.
+# Excludes: clinical terms, identity terms, religious vocabulary.
+
+# F-word
+foder
 foda
 foda-se
-foder
 fodido
 fodida
-grelho
+fodidos
+fodidas
+meter       # vulgar slang for sex in PT
+enrabar     # vulgar sex act
+
+# Shit
 merda
-paneleiro
-pau
-peidar
-peido
-pinto
-porra
+merdas
+cagar
+cagada
+cagadas
+cagado
+bosta
+
+# Bitch / whore
 puta
 puto
+putas
+putos
 puta que pariu
 puta que te pariu
-sacanagem
-vai-te foder
-vai tomar no cu
-veado
 vadia
-xana
+vadias
+biscate
+biscates
+rameira
+
+# C-word / genitalia
+cona
+boceta
+buceta      # BR variant
 xochota
+xana
+grelho
+caralho     # d-word (very common expletive)
+
+# A-word
+cu
+cu de quem te pariu
+vai tomar no cu
+
+# Mother insults
+filho da puta
+filha da puta
+vai-te foder
+tua mãe
+porra da tua mãe
+
+# Genitalia / sex
+pau         # d-word
+pinto
+cacete
+esporra     # spunk
+boquete     # blowjob
+
+# Ass / balls
+bumbum      # butt (mild but in this context vulgar)
+saco        # balls (vulgar)
+colhões
+cabrão      # bastard
+cabrões
+
+# Slurs
+paneleiro   # gay slur (PT)
+veado       # deer, BUT used as gay slur in BR — filter
+bicha       # effeminate/gay slur
 arrombado
-baba ovo
-boquete
+arrombada
+
+# Insults
+bastardo
+bastarda
+cretino
+idiota      # mild
+imbecil
+
+# Compound expletives
+que se foda
+que merda
 porra de uma égua
+vai à merda
+toma no cu
+foda-se isso
+
+# Bodily functions
+peidar
+peido
+soltar um peido
+cagar fora do vaso
+
+# Misc vulgar
+sacanagem   # f***ery/dirty trick (strong)
+safado
+safada
+porco
+porca
