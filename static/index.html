@@ -449,7 +449,8 @@ function renderCaptionToggles() {
 document.querySelectorAll('.lang-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const lang = btn.dataset.lang;
-    if (lang === selectedLang || isRunning) return;
+    if (lang === selectedLang) return;
+    if (isRunning) { switchLanguage(lang); return; }
     selectedLang = lang;
     document.querySelectorAll('.lang-btn').forEach(b =>
       b.classList.toggle('active', b.dataset.lang === lang)
@@ -537,10 +538,11 @@ function clearPanels() {
 }
 
 // ── Session management ────────────────────────────────────────────────────
-async function startSession() {
-  if (isRunning) return;
-  clearReconnectTimer();
 
+/** Opens a Gladia session for the current selectedLang + enabled translations,
+ *  then opens the relay WebSocket and starts streaming audio.
+ *  Assumes micStream is already acquired and isRunning is true. */
+async function initGladiaAndConnect() {
   const targetLangs = ALL_LANGS.filter(l => l !== selectedLang && translationEnabled[l]);
   const config = JSON.parse(JSON.stringify(GLADIA_CONFIG_BASE));
   config.language_config = { languages: [selectedLang], code_switching: false };
@@ -551,20 +553,44 @@ async function startSession() {
     const resp = await fetch('/church_transcription/init-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
+      body: JSON.stringify(config),
     });
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`Init session failed (${resp.status}): ${text}`);
-    }
+    if (!resp.ok) throw new Error(`Init failed (${resp.status}): ${await resp.text()}`);
     const data = await resp.json();
     gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
-    if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
+    if (!gladiaWsUrl) throw new Error('No WebSocket URL: ' + JSON.stringify(data));
     if (data.session_id) sessionIdEl.textContent = data.session_id;
   } catch (err) {
-    alert('Failed to start session: ' + err.message);
-    return;
+    return err; // caller checks
   }
+
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    ws.send(gladiaWsUrl);
+    startAudio();
+  });
+  ws.addEventListener('message', (evt) => {
+    if (typeof evt.data !== 'string') return;
+    let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+    handleGladiaMessage(msg);
+  });
+  ws.addEventListener('close', (evt) => {
+    if (!isRunning) return;
+    if (evt.code !== 1000) scheduleReconnect();
+  });
+  ws.addEventListener('error', () => {
+    if (isRunning) scheduleReconnect();
+  });
+
+  return null; // success
+}
+
+async function startSession() {
+  if (isRunning) return;
+  clearReconnectTimer();
 
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -577,35 +603,42 @@ async function startSession() {
   startBtn.disabled = true;
   stopBtn.disabled = false;
   statusDot.classList.add('live');
-  // Disable config controls while running
-  document.querySelectorAll('.lang-btn').forEach(b => b.disabled = true);
-  renderCaptionToggles(); // re-renders with disabled=true
+  renderCaptionToggles(); // re-renders caption btns as disabled
   clearPanels();
 
-  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
-  ws.binaryType = 'arraybuffer';
+  const err = await initGladiaAndConnect();
+  if (err) {
+    alert('Failed to start session: ' + err.message);
+    stopSession(true);
+  }
+}
 
-  ws.addEventListener('open', () => {
-    ws.send(gladiaWsUrl);
-    startAudio();
-  });
+/** Switch spoken language mid-session: closes Gladia, keeps mic, reopens. */
+async function switchLanguage(newLang) {
+  // Close existing relay WS (audio processor checks ws.readyState so it silences itself)
+  clearReconnectTimer();
+  if (ws) {
+    try { ws.send(JSON.stringify({ type: 'stop_recording' })); } catch (_) {}
+    const old = ws; ws = null;
+    setTimeout(() => { try { old.close(1000); } catch (_) {} }, 150);
+  }
+  stopAudio(true); // keep micStream
 
-  ws.addEventListener('message', (evt) => {
-    if (typeof evt.data !== 'string') return;
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
-    handleGladiaMessage(msg);
-  });
+  // Update UI state
+  selectedLang = newLang;
+  document.querySelectorAll('.lang-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.lang === newLang)
+  );
+  renderCaptionToggles();
+  updateGrid();
+  ALL_LANGS.forEach(l => { partials[l] = ''; });
+  bottomPartial.textContent = '';
 
-  ws.addEventListener('close', (evt) => {
-    if (!isRunning) return;
-    if (evt.code !== 1000) scheduleReconnect();
-  });
-
-  ws.addEventListener('error', () => {
-    if (isRunning) scheduleReconnect();
-  });
+  const err = await initGladiaAndConnect();
+  if (err) {
+    alert('Failed to switch language: ' + err.message);
+    stopSession(true);
+  }
 }
 
 async function stopSession(userInitiated = true) {
@@ -624,20 +657,18 @@ async function stopSession(userInitiated = true) {
     stopBtn.disabled = true;
     statusDot.classList.remove('live');
     bottomPartial.textContent = '';
-    // Re-enable config controls
-    document.querySelectorAll('.lang-btn').forEach(b => b.disabled = false);
-    renderCaptionToggles();
+    renderCaptionToggles(); // re-renders caption btns as enabled
   }
 }
 
 function scheduleReconnect() {
   clearReconnectTimer();
-  stopAudio();
+  stopAudio(true); // keep mic for reconnect
   if (ws) { try { ws.close(); } catch (_) {} ws = null; }
-  reconnectTimer = setTimeout(() => {
+  reconnectTimer = setTimeout(async () => {
     if (!isRunning) return;
-    isRunning = false;
-    startSession();
+    const err = await initGladiaAndConnect();
+    if (err) scheduleReconnect(); // retry
   }, 1000);
 }
 
@@ -662,11 +693,11 @@ function startAudio() {
   scriptProcessor.connect(audioContext.destination);
 }
 
-function stopAudio() {
+function stopAudio(keepMic = false) {
   if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
   if (sourceNode)      { sourceNode.disconnect(); sourceNode = null; }
   if (audioContext)    { audioContext.close().catch(() => {}); audioContext = null; }
-  if (micStream)       { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (!keepMic && micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
 }
 
 function float32ToInt16(float32) {
