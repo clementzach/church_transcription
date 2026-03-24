@@ -50,5 +50,8 @@ fout chyen  # dog f***
 
 # General strong insults
 kochon sal  # dirty pig
+kochon      # pig (used as insult, not the animal in neutral context)
 sal bagay   # dirty thing
 derespektan # disrespectful (mild but context-dependent)
+debidanj    # loose/promiscuous woman (research-confirmed HT slur)
+vakabon     # vagabond/lowlife

@@ -90,14 +90,19 @@ satanás         # Satan
 # ── Haitian Creole (HT) — Scripture & Religious vocabulary ───────────────
 # HT religious vocabulary. None of these appear in ht.txt.
 bondye          # God ("Bon Dieu")
+letènel         # the Eternal / Lord (alternate name for God)
 jezi            # Jesus
+jezikri         # Jesus Christ (alternate spelling)
 kris            # Christ
 jezi kris       # Jesus Christ
 lespri          # Spirit (Lespri Sen = Holy Spirit)
 lespri sen      # Holy Spirit
+sentespri       # Holy Spirit (alternate spelling, from French "Saint-Esprit")
 lanfè           # hell
+jenfonman       # perdition/hell (alternate HT term)
 syèl            # heaven
 touye           # to kill
+vèj             # virgin (alternate spelling)
 vyèj            # virgin (Vyèj Mari = Virgin Mary)
 vyèj mari       # Virgin Mary
 legliz          # church
@@ -105,8 +110,11 @@ lasent          # the saint / holy
 sakrèman        # sacrament
 prèt            # priest / pastor
 pwofèt          # prophet
+apòt            # apostle
 lavi            # life (appears in scriptural context)
 lafwa           # faith
+pèche           # sin (theological; not to be confused with profanity)
+dezi            # lust/desire (theological context: "pa dezi fanm lòt moun")
 senyè           # Lord
 papa bondye     # Heavenly Father
 dyab            # devil/Satan (appears in scripture)
