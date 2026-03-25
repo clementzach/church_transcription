@@ -76,12 +76,11 @@ gook
 gooks
 wetback
 wetbacks
-cracker        # racial slur
-crackers
+# cracker/crackers removed — also the food (Graham crackers, saltine crackers)
+# dyke removed — also a water management structure (dike/dyke)
 faggot
 faggots
 tranny
-dyke           # slur usage
 
 # ── Compound insults ──────────────────────────────────────────────────────────
 son of a bitch
