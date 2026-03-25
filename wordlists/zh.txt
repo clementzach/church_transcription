@@ -12,7 +12,7 @@
 操你妈
 我操你
 去操
-卧槽        # "holy shit" internet slang, derived from profanity
+# 卧槽 removed — normalized internet exclamation ("OMG/holy cow"); no longer truly profane
 
 # Mother insults
 他妈的
@@ -33,11 +33,11 @@
 
 # Compound insults
 狗屎        # dog shit
-混蛋        # bastard/jerk
+# 混蛋 removed — roughly "jerk/idiot"; too mild and common in everyday speech
 王八蛋      # strong insult (turtle egg = bastard)
 狗娘养的    # son of a bitch
 狗日的      # son of a bitch (alternate)
-杂种        # bastard/mixed breed (slur)
+# 杂种 removed — also means "hybrid/crossbreed" in agricultural/botanical contexts
 臭婊子      # stinky bitch/whore
 婊子        # whore/bitch
 贱人        # lowly/cheap person (strong insult)
