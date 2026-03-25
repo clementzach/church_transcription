@@ -1,9 +1,9 @@
 # Portuguese profanity word list
+# Only words that are 100% profane in every context.
+# If a word needs context to be an insult, use the full compound phrase instead.
 # Covers both Brazilian Portuguese (BR) and European Portuguese (PT).
-# Sourced from LDNOOBW project (filtered) + community additions.
-# Excludes: clinical terms, identity terms, religious vocabulary.
 
-# F-word
+# ── F-word ────────────────────────────────────────────────────────────────────
 foder
 foda
 foda-se
@@ -11,81 +11,70 @@ fodido
 fodida
 fodidos
 fodidas
-# meter removed — standard Portuguese verb meaning "to put/place"; massive false positive risk
-enrabar     # vulgar sex act
+enrabar
+# meter removed — standard Portuguese verb meaning "to put/place"
 
-# Shit
+# ── Shit ──────────────────────────────────────────────────────────────────────
 merda
 merdas
 cagar
-cagada
-cagadas
-cagado
-bosta
+# cagada/cagadas/cagado removed — used as "blunder/mistake" in casual speech
+# bosta removed — means animal manure; used in farming/agricultural contexts
 
-# Bitch / whore
+# ── Bitch / whore ─────────────────────────────────────────────────────────────
 puta
 puto
 putas
 putos
-puta que pariu
-puta que te pariu
-vadia
-vadias
 biscate
 biscates
-rameira
+# rameira removed — appears in Portuguese Bible translations (harlot)
+# vadia/vadias removed — means "stray/vagrant" (used for stray animals)
 
-# C-word / genitalia
+# ── C-word / genitalia ────────────────────────────────────────────────────────
 cona
 boceta
-buceta      # BR variant
+buceta
 xochota
 xana
 grelho
-caralho     # d-word (very common expletive)
+caralho
+# pau removed — means "wood/stick" in everyday Portuguese
+# pinto removed — "chick" (baby bird); common surname
 
-# A-word
+# ── A-word ────────────────────────────────────────────────────────────────────
 cu
-cu de quem te pariu
-vai tomar no cu
+# bumbum removed — mild childish word
+# saco removed — means "bag/sack"
 
-# Mother insults
-filho da puta
-filha da puta
-vai-te foder
-tua mãe
-porra da tua mãe
-
-# Genitalia / sex
-# pau removed — means "wood/stick" in everyday Portuguese ("pau de madeira", "pau de canela")
-# pinto removed — "pinto" means "chick" (baby bird) and is a common surname/name
+# ── Genitalia / sex ───────────────────────────────────────────────────────────
 cacete
-esporra     # spunk
-boquete     # blowjob
+esporra
+# boquete removed — means "hole/breach" in standard EU Portuguese
 
-# Ass / balls
-# bumbum removed — mild childish word; not strong enough to risk false positives
-# saco removed — means "bag/sack"; "passe-me o saco" is completely innocent
+# ── Balls ─────────────────────────────────────────────────────────────────────
 colhões
-cabrão      # bastard
+cabrão
 cabrões
 
-# Slurs
-paneleiro   # gay slur (PT)
-veado       # deer, BUT used as gay slur in BR — filter
-bicha       # effeminate/gay slur
+# ── Slurs ─────────────────────────────────────────────────────────────────────
+paneleiro
 arrombado
 arrombada
+# veado removed — is the standard Portuguese word for deer
+# bicha removed — means "worm/insect" in European Portuguese
+# bastardo/bastarda removed — genealogical/historical usage
+# cretino/idiota/imbecil removed — standard vocabulary
 
-# Insults
-bastardo
-bastarda
-cretino
-idiota      # mild
-imbecil
-
-# Compound expletives
+# ── Compound insults ──────────────────────────────────────────────────────────
+filho da puta
+filha da puta
+puta que pariu
+puta que te pariu
+vai-te foder
+porra da tua mãe    # tua mãe standalone removed — just means "your mother"
+cu de quem te pariu
+vai tomar no cu
 que se foda
 que merda
 porra de uma égua
@@ -93,15 +82,8 @@ vai à merda
 toma no cu
 foda-se isso
 
-# Bodily functions
-peidar
-peido
-soltar um peido
-cagar fora do vaso
-
-# Misc vulgar
-sacanagem   # f***ery/dirty trick (strong)
-safado
-safada
-porco
-porca
+# ── Misc vulgar ───────────────────────────────────────────────────────────────
+# sacanagem removed — means "mischief/naughtiness" in mild BR usage
+# safado/safada removed — means "cheeky/naughty"; not unambiguously profane
+# porco/porca removed — pig/sow (animal words)
+# peidar/peido/soltar um peido removed — bodily function vocabulary; not strong profanity
