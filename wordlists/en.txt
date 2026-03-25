@@ -1,0 +1,96 @@
+# English profanity word list
+# Conservative — only words that are unambiguously obscene in any context.
+#
+# Deliberately excluded (biblical / common / religious vocabulary):
+#   ass       — donkey (Num 22, Judges 15, Matt 21)
+#   cock      — rooster (Matt 26:34)
+#   prick     — goad (Acts 9:5)
+#   pricks    — goads (Acts 9:5 KJV)
+#   bastard   — could appear in genealogical/historical contexts
+#   whore     — harlot (used throughout scripture)
+#   damn      — user explicitly approved
+#   hell      — user explicitly approved
+#   God       — user explicitly approved
+#   lust, virgin, naked, womb, breasts, fornication, harlot, loins — KJV vocabulary
+#   bitch     — female dog (used in animal/husbandry contexts)
+#   crap      — mild; not worth the risk
+
+# ── F-word family ─────────────────────────────────────────────────────────────
+fuck
+fucked
+fucker
+fuckers
+fucking
+fucks
+fuckin
+motherfuck
+motherfucker
+motherfuckers
+motherfucking
+
+# ── Shit family ───────────────────────────────────────────────────────────────
+shit
+shits
+shitty
+shitter
+shitters
+bullshit
+horseshit
+dipshit
+shitstorm
+shithead
+
+# ── A-word compounds (standalone "ass" = donkey, excluded above) ──────────────
+asshole
+assholes
+asshat
+asswipe
+jackass
+dumbass
+
+# ── C-word ────────────────────────────────────────────────────────────────────
+cunt
+cunts
+
+# ── D-word compounds ──────────────────────────────────────────────────────────
+dickhead
+dickheads
+dickwad
+
+# ── P-word ────────────────────────────────────────────────────────────────────
+# "pussy" alone excluded — means cat; only unambiguous compound forms
+pussy ass       # compound slur
+
+# ── Slurs ─────────────────────────────────────────────────────────────────────
+nigger
+niggers
+nigga
+niggas
+kike
+kikes
+spic
+spics
+chink
+chinks
+gook
+gooks
+wetback
+wetbacks
+cracker        # racial slur
+crackers
+faggot
+faggots
+tranny
+dyke           # slur usage
+
+# ── Compound insults ──────────────────────────────────────────────────────────
+son of a bitch
+sons of bitches
+what the fuck
+what the hell is wrong with you  # only if extremely explicit — leave to context
+
+# ── Misc strong ───────────────────────────────────────────────────────────────
+jerkoff
+jerk off
+wanker
+wankers

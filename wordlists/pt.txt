@@ -11,7 +11,7 @@ fodido
 fodida
 fodidos
 fodidas
-meter       # vulgar slang for sex in PT
+# meter removed — standard Portuguese verb meaning "to put/place"; massive false positive risk
 enrabar     # vulgar sex act
 
 # Shit
@@ -58,15 +58,15 @@ tua mãe
 porra da tua mãe
 
 # Genitalia / sex
-pau         # d-word
-pinto
+# pau removed — means "wood/stick" in everyday Portuguese ("pau de madeira", "pau de canela")
+# pinto removed — "pinto" means "chick" (baby bird) and is a common surname/name
 cacete
 esporra     # spunk
 boquete     # blowjob
 
 # Ass / balls
-bumbum      # butt (mild but in this context vulgar)
-saco        # balls (vulgar)
+# bumbum removed — mild childish word; not strong enough to risk false positives
+# saco removed — means "bag/sack"; "passe-me o saco" is completely innocent
 colhões
 cabrão      # bastard
 cabrões

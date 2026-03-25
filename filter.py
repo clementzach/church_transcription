@@ -3,12 +3,16 @@ Profanity filter module — imported by both app.py and tests.
 
 Keeps filter logic independent of Flask/gevent so tests can import it
 without triggering monkey-patching or requiring a running server.
+
+All filtering is done with explicit word lists in wordlists/*.txt.
+Latin-script languages (EN, ES, PT, HT) use \\b word-boundary regex so
+substrings are never matched ("assessment" is never flagged for "ass").
+Mandarin (ZH) uses substring matching on multi-character sequences only.
 """
 
 import os
 import re
 import logging
-from better_profanity import profanity as _bp_filter
 
 log = logging.getLogger(__name__)
 
@@ -31,41 +35,44 @@ def _load_wordlist(filename: str) -> list:
         return []
 
 
-# ── Bootstrap better-profanity ─────────────────────────────────────────────
-# Whitelist first: biblical/LDS vocabulary must never be censored.
-_whitelist = _load_wordlist('whitelist.txt')
-_bp_filter.load_censor_words(whitelist_words=_whitelist)
+def _build_latin_regex(words: list):
+    """
+    Build a case-insensitive word-boundary regex from a list of words/phrases.
+    Sorted longest-first so multi-word phrases match before their component words.
+    Returns None if the list is empty.
+    """
+    if not words:
+        return None
+    words = sorted(set(words), key=len, reverse=True)
+    # \\b works at the edge of both single words and phrases
+    pattern = r'\b(?:' + '|'.join(re.escape(w) for w in words) + r')\b'
+    return re.compile(pattern, re.IGNORECASE)
 
-# Add multilingual profanity (ES, PT, HT).
-# better-profanity uses whole-word matching so "assessment" ≠ "ass".
-_custom_words = (
+
+# ── Load word lists ───────────────────────────────────────────────────────────
+_latin_words = (
+    _load_wordlist('en.txt') +
     _load_wordlist('es.txt') +
     _load_wordlist('pt.txt') +
     _load_wordlist('ht.txt')
 )
-_bp_filter.add_censor_words(_custom_words)
+_latin_re = _build_latin_regex(_latin_words)
 
-_n_builtin = len(_bp_filter.CENSOR_WORDSET) - len(_custom_words)
-log.info(
-    "Filter ready: %d EN built-in + %d multilingual custom + %d whitelisted",
-    _n_builtin, len(_custom_words), len(_whitelist),
-)
-
-# ── ZH substring regex ────────────────────────────────────────────────────
-# Chinese has no word boundaries; handled separately.
-# Single characters with common non-vulgar uses (干, 日, 操) are excluded.
+# ZH: no word boundaries in Chinese; use substring matching on explicit sequences.
+# Single characters with common non-vulgar uses (干, 日, 操) are excluded from zh.txt.
 _zh_words = _load_wordlist('zh.txt')
 _zh_re = re.compile('|'.join(re.escape(w) for w in _zh_words)) if _zh_words else None
 
+log.info(
+    "Filter ready: %d latin-script words/phrases, %d ZH sequences",
+    len(_latin_words), len(_zh_words),
+)
+
 
 def filter_text(text: str) -> str:
-    """Censor profanity across all supported languages.
-
-    Latin-script languages (EN, ES, PT, HT): better-profanity with whole-word
-    matching and KJV/LDS whitelist.
-    Mandarin (ZH): substring regex on multi-character sequences only.
-    """
-    text = _bp_filter.censor(text, censor_char=' ')
+    """Censor profanity across all supported languages, replacing matches with a space."""
+    if _latin_re:
+        text = _latin_re.sub(' ', text)
     if _zh_re:
         text = _zh_re.sub(' ', text)
     return text

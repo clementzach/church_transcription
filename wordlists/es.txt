@@ -20,9 +20,7 @@ chingadas
 chingadera
 chingaderas
 chinga tu madre
-coger         # vulgar in Latin America (means "to grab" in Spain — keep for LA coverage)
-cogido
-cogida
+# coger/cogido removed — means "to grab/take" throughout Spain; false positive risk too high
 
 # Shit
 mierda
@@ -39,8 +37,7 @@ putos
 putas
 putada
 putazo
-zorra
-zorras
+# zorra/zorras removed — primary meaning is "fox" (the animal)
 ramera
 furcia
 
@@ -60,11 +57,11 @@ me cago en tu madre
 # D-word / genitalia
 verga
 polla
-pito
 picha
 cipote
 cojones
-huevos        # balls (vulgar)
+# huevos removed — primary meaning is "eggs" (food); massive false positive risk
+# pito removed — primary meaning is "whistle/horn"
 pendejo
 pendeja
 pendejos
@@ -87,15 +84,14 @@ maricón
 maricona
 maricones
 mariconazo
-gonorrea      # used as slur in Colombia
+# gonorrea removed — it is the medical name for the STD; false positive in health contexts
 cabrón
 cabrona
 cabrones
-mamón
-mamona
 gilipollas
-subnormal
-imbécil       # mild but often vulgar in context
+# mamón/mamona removed — means "nursing infant" and also a tropical fruit
+# subnormal removed — clinical/statistical term
+# imbécil removed — standard Spanish word used in educational/clinical contexts
 
 # Compound insults
 hijo de la chingada
@@ -112,4 +108,4 @@ me cago en la hostia  # blasphemous — filter
 puto drogadicto
 
 # Pinche (Mexican expletive modifier)
-pinche
+# pinche removed — means "kitchen assistant" in Spain; only vulgar in Mexico
