@@ -1,0 +1,130 @@
+# Whitelist — words that must NEVER be censored.
+# Add entries here whenever a legitimate religious/scriptural/clinical word
+# appears in (or risks appearing in) a profanity list.
+# Format: one word/phrase per line; inline # comments are stripped.
+
+# ── English (EN) — KJV Scripture & LDS vocabulary ─────────────────────────
+# Explicitly requested: never filter these
+god
+hell
+damn
+
+# KJV Old/New Testament vocabulary
+kill        # "thou shalt not kill" (Exodus 20:13)
+lust        # "whosoever looketh on a woman to lust after her" (Matthew 5:28)
+virgin      # Virgin Mary, Isaiah 7:14
+naked       # Genesis 3, throughout OT
+womb        # extremely common throughout scripture
+sex         # modern discussions of chastity/morality
+sexual      # same
+loins       # "gird up your loins"; "fruit of his loins"
+piss        # 2 Kings 18:27 KJV
+pisseth     # archaic KJV form, same verse
+
+# KJV words for animals/objects that share spelling with profanity
+ass         # donkey — Numbers 22 (Balaam's ass), throughout OT
+asses       # plural
+cock        # rooster — "before the cock crow" (Matthew 26:34)
+prick       # goad/thorn — "kick against the pricks" (Acts 9:5)
+pricks      # plural form (same verse)
+
+# Strong but scriptural terms
+whore       # "whore of Babylon" (Revelation 17); Proverbs
+bastard     # Deuteronomy 23:2 KJV
+breasts     # Song of Solomon; multiple OT books
+fornication # throughout NT (KJV)
+harlot      # throughout OT/NT
+
+# LDS-specific terminology
+sacrament
+priesthood
+patriarch
+seer
+
+# ── Spanish (ES) — Scripture & Religious vocabulary ───────────────────────
+# These are NOT in es.txt but listed here proactively.
+# "me cago en dios" IS in es.txt as a phrase-to-filter; "dios" alone is safe.
+dios            # God
+jesucristo      # Jesus Christ
+jesús           # Jesus
+cristo          # Christ
+espíritu        # Spirit (Espíritu Santo)
+virgen          # Virgin (la Virgen María)
+infierno        # hell — not in es.txt but whitelisted proactively
+matar           # to kill — not in es.txt
+lujuria         # lust
+desnudo         # naked (masculine)
+desnuda         # naked (feminine)
+fornicación     # fornication
+santa           # saint/holy (feminine)
+santo           # saint/holy (masculine)
+sagrado         # sacred (masculine)
+sagrada         # sacred (feminine)
+sacramento      # sacrament (LDS)
+sacerdocio      # priesthood (LDS)
+profeta         # prophet
+diablo          # devil (appears in scripture)
+satanás         # Satan
+demonio         # demon (appears in scripture)
+
+# ── Portuguese (PT) — Scripture & Religious vocabulary ───────────────────
+deus            # God
+jesus           # Jesus
+cristo          # Christ (same as ES, kept here for clarity)
+espírito        # Spirit (Espírito Santo)
+virgem          # Virgin
+inferno         # hell — NOT in pt.txt but whitelisted proactively
+matar           # to kill
+luxúria         # lust
+nu              # naked (masculine)
+nua             # naked (feminine)
+fornicação      # fornication
+sagrado         # sacred
+sagrada         # sacred (feminine)
+sacramento      # sacrament
+sacerdócio      # priesthood
+profeta         # prophet
+diabo           # devil
+satanás         # Satan
+
+# ── Haitian Creole (HT) — Scripture & Religious vocabulary ───────────────
+# HT religious vocabulary. None of these appear in ht.txt.
+bondye          # God ("Bon Dieu")
+letènel         # the Eternal / Lord (alternate name for God)
+jezi            # Jesus
+jezikri         # Jesus Christ (alternate spelling)
+kris            # Christ
+jezi kris       # Jesus Christ
+lespri          # Spirit (Lespri Sen = Holy Spirit)
+lespri sen      # Holy Spirit
+sentespri       # Holy Spirit (alternate spelling, from French "Saint-Esprit")
+lanfè           # hell
+jenfonman       # perdition/hell (alternate HT term)
+syèl            # heaven
+touye           # to kill
+vèj             # virgin (alternate spelling)
+vyèj            # virgin (Vyèj Mari = Virgin Mary)
+vyèj mari       # Virgin Mary
+legliz          # church
+lasent          # the saint / holy
+sakrèman        # sacrament
+prèt            # priest / pastor
+pwofèt          # prophet
+apòt            # apostle
+lavi            # life (appears in scriptural context)
+lafwa           # faith
+pèche           # sin (theological; not to be confused with profanity)
+dezi            # lust/desire (theological context: "pa dezi fanm lòt moun")
+senyè           # Lord
+papa bondye     # Heavenly Father
+dyab            # devil/Satan (appears in scripture)
+satan           # Satan
+
+# ── Mandarin Chinese (ZH) — Scripture & Religious vocabulary ─────────────
+# ZH filtering uses a separate substring regex (not better-profanity),
+# so this section is for documentation only — ensure these do NOT appear in zh.txt.
+# Verified absent from zh.txt:
+#   上帝 (God), 神 (God/spirit), 地狱 (hell), 耶稣 (Jesus), 基督 (Christ),
+#   圣经 (Bible), 天堂 (heaven), 天父 (Heavenly Father), 先知 (prophet),
+#   圣灵 (Holy Spirit), 杀 (kill), 撒旦 (Satan), 魔鬼 (devil),
+#   贞女/童贞 (virgin), 情欲 (lust), 裸体 (naked), 子宫 (womb)

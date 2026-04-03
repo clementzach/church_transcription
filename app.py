@@ -15,6 +15,7 @@ from flask_sock import Sock
 from dotenv import load_dotenv
 import websocket
 from openai import OpenAI
+from filter import filter_text as _filter_text
 
 load_dotenv()
 
@@ -45,6 +46,11 @@ TTS_INSTRUCTIONS = {
     'ht': 'Ou pale kreyòl tankou yon natif natal',
 }
 
+
+# ── Session state (one active recording session at a time) ─────────────────
+_lock = threading.Lock()
+current_session_id = None
+listener_registry = {lang: [] for lang in TRANSLATION_LANGS}  # lang -> [ws, ...]
 SESSION_TIMEOUT_SECS = 2 * 3600  # 2 hours
 
 # ── Session state ────────────────────────────────────────────────────────────
@@ -338,26 +344,42 @@ def stream(browser_ws):
                 log.info("stream: Gladia closed connection")
                 break
             gladia_msgs += 1
-            # Relay to recorder browser (unchanged)
-            try:
-                browser_ws.send(raw)
-            except Exception as e:
-                log.warning("stream: browser send error: %s", e)
-                break
-            # Intercept committed translation messages to trigger TTS
+
+            # Parse the message, filter any text fields, then forward to browser.
+            # Filtering here means the recorder display and listeners all see clean text.
+            to_send = raw
             try:
                 msg = json.loads(raw)
                 msg_type = msg.get('type')
                 if gladia_msgs <= 5 or msg_type in ('transcript', 'translation'):
                     log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
-                if msg_type == 'translation':
+
+                if msg_type == 'transcript':
+                    utterance = (msg.get('data') or {}).get('utterance') or {}
+                    if utterance.get('text'):
+                        utterance['text'] = _filter_text(utterance['text'])
+                        to_send = json.dumps(msg)
+
+                elif msg_type == 'translation':
                     data = msg.get('data', {})
+                    translated = data.get('translated_utterance') or {}
+                    if translated.get('text'):
+                        translated['text'] = _filter_text(translated['text'])
+                        to_send = json.dumps(msg)
+                    # Enqueue filtered text for TTS/listener delivery
                     lang = (data.get('target_language') or '').lower()
-                    text = (data.get('translated_utterance') or {}).get('text', '')
+                    text = translated.get('text', '')
                     if lang in TRANSLATION_LANGS and text:
                         _enqueue_tts(session_id, lang, text)
             except Exception:
-                pass
+                pass  # on any parse error, forward the original raw message
+
+            try:
+                browser_ws.send(to_send)
+            except Exception as e:
+                log.warning("stream: browser send error: %s", e)
+                break
+
     finally:
         log.info("stream: closing (audio_chunks=%d, gladia_msgs=%d)", audio_chunks, gladia_msgs)
         stop_event.set()
