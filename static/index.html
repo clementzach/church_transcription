@@ -15,6 +15,7 @@
     --es: #f97316;
     --ht: #22c55e;
     --pt: #a855f7;
+    --zh: #06b6d4;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -74,6 +75,7 @@
   .lang-btn[data-lang="es"] { --c: var(--es); }
   .lang-btn[data-lang="ht"] { --c: var(--ht); }
   .lang-btn[data-lang="pt"] { --c: var(--pt); }
+  .lang-btn[data-lang="zh"] { --c: var(--zh); }
   .lang-btn.active {
     background: var(--c);
     color: #fff;
@@ -142,6 +144,7 @@
   .panel[data-lang="es"] { --accent: var(--es); }
   .panel[data-lang="ht"] { --accent: var(--ht); }
   .panel[data-lang="pt"] { --accent: var(--pt); }
+  .panel[data-lang="zh"] { --accent: var(--zh); }
 
   .panel-tag {
     font-size: 11px;
@@ -279,6 +282,7 @@
       <button class="lang-btn" data-lang="es">ES</button>
       <button class="lang-btn" data-lang="ht">HT</button>
       <button class="lang-btn" data-lang="pt">PT</button>
+      <button class="lang-btn" data-lang="zh">ZH</button>
     </div>
   </div>
 
@@ -314,6 +318,10 @@
     <div class="panel-tag">PT</div>
     <div class="panel-lines" id="lines-pt"></div>
   </div>
+  <div class="panel" data-lang="zh">
+    <div class="panel-tag">ZH</div>
+    <div class="panel-lines" id="lines-zh"></div>
+  </div>
 </div>
 
 <!-- Bottom bar -->
@@ -325,7 +333,7 @@
 
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
-const ALL_LANGS = ['en', 'es', 'ht', 'pt'];
+const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh'];
 const GLADIA_CONFIG_BASE = {
   encoding: 'wav/pcm',
   sample_rate: 16000,

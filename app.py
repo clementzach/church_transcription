@@ -45,18 +45,20 @@ if TTS_PROVIDER == 'google':
     from google.genai import types as _google_types
     google_client = _google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-TRANSLATION_LANGS = ['es', 'ht', 'pt']
+TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh']
 
 # ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
 OPENAI_TTS_VOICES = {
     'es': 'nova',
     'pt': 'shimmer',
     'ht': 'alloy',
+    'zh': 'nova',
 }
 OPENAI_TTS_INSTRUCTIONS = {
     'es': 'Speak naturally and clearly in Spanish.',
     'pt': 'Fale de forma natural e clara em português.',
     'ht': 'Ou pale kreyòl tankou yon natif natal',
+    'zh': '请用标准普通话自然流利地朗读，像母语人士一样说话，发音清晰，语调自然。',
 }
 
 # ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
@@ -64,6 +66,7 @@ GOOGLE_TTS_VOICES = {
     'es': 'Charon',
     'pt': 'Aoede',
     'ht': 'Kore',
+    'zh': 'Fenrir',
 }
 GOOGLE_TTS_INSTRUCTIONS = {
     'es': (
@@ -80,6 +83,10 @@ GOOGLE_TTS_INSTRUCTIONS = {
         'Ou se yon moun ki pale kreyòl ayisyen kòm lang manman ou. '
         'Pale natirèlman ak aksan, ritem ak entònasyon otantik kreyòl ayisyen. '
         'Sone cho, klè epi konvèsasyonèl.'
+    ),
+    'zh': (
+        '你是一位普通话母语者。请用自然流利的标准普通话朗读，'
+        '发音标准，语调自然，声音温暖清晰，像日常对话一样亲切。'
     ),
 }
 
