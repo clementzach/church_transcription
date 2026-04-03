@@ -8,6 +8,7 @@ import queue
 import secrets
 import string
 import threading
+import time
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sock import Sock
@@ -48,9 +49,30 @@ TTS_INSTRUCTIONS = {
 _lock = threading.Lock()
 current_session_id = None
 listener_registry = {lang: [] for lang in TRANSLATION_LANGS}  # lang -> [ws, ...]
+session_start_time = None   # epoch seconds when the current session began
+
+SESSION_TIMEOUT_SECS = 2 * 3600  # 2 hours
 
 # One TTS queue per language; maxsize=1 so we drop stale segments
 tts_queues = {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS}
+
+_session_timer = None  # threading.Timer that expires the current session
+
+
+def _expire_session():
+    """Called after SESSION_TIMEOUT_SECS to close all listener connections."""
+    global current_session_id
+    log.info("Session timed out after %d seconds; closing all listener connections", SESSION_TIMEOUT_SECS)
+    with _lock:
+        current_session_id = None
+        for lang in TRANSLATION_LANGS:
+            for ws_conn in list(listener_registry.get(lang, [])):
+                try:
+                    ws_conn.send(json.dumps({'type': 'error', 'message': 'Session expired (2-hour limit reached)'}))
+                    ws_conn.close()
+                except Exception:
+                    pass
+            listener_registry[lang] = []
 
 
 def _generate_session_id():
@@ -59,8 +81,10 @@ def _generate_session_id():
 
 
 def _enqueue_tts(lang, text):
-    # Skip entirely if no listeners are connected for this language
+    # Skip if session has expired or no listeners are connected for this language
     with _lock:
+        if session_start_time is not None and (time.time() - session_start_time) > SESSION_TIMEOUT_SECS:
+            return
         if not listener_registry.get(lang):
             return
     q = tts_queues[lang]
@@ -163,7 +187,7 @@ def listen():
 
 @app.route("/init-session", methods=["POST"])
 def init_session():
-    global current_session_id
+    global current_session_id, session_start_time, _session_timer
     config = request.get_json()
     log.info("init-session called, config=%s", json.dumps(config))
     resp = requests.post(
@@ -180,11 +204,19 @@ def init_session():
         session_id = _generate_session_id()
         with _lock:
             current_session_id = session_id
+            session_start_time = time.time()
             for lang in TRANSLATION_LANGS:
                 listener_registry[lang] = []
+        # Cancel any existing session timer and start a new one
+        if _session_timer is not None:
+            _session_timer.cancel()
+        _session_timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session)
+        _session_timer.daemon = True
+        _session_timer.start()
+        log.info("Session created: id=%s timeout=%ds gladia_url=%s",
+                 session_id, SESSION_TIMEOUT_SECS, resp.json().get('url') or resp.json().get('websocket_url'))
         data = resp.json()
         data['session_id'] = session_id
-        log.info("Session created: id=%s gladia_url=%s", session_id, data.get('url') or data.get('websocket_url'))
         return jsonify(data)
     log.error("Gladia init failed: %d %s", resp.status_code, resp.text)
     return (resp.content, resp.status_code, {"Content-Type": "application/json"})
