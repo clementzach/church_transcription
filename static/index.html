@@ -334,8 +334,9 @@ const GLADIA_CONFIG_BASE = {
   realtime_processing: {
     translation: true,
     translation_config: {
-      model: 'base',
-      match_original_utterances: true,
+      model: 'enhanced',
+      lipsync: false,
+      match_original_utterances: false,
       context_adaptation: true,
       context: 'This is a Latter-day Saint (LDS/Mormon) church service. Speakers may reference LDS-specific scripture, theology, and organizational terms. Preserve proper nouns exactly as spoken.'
     }
