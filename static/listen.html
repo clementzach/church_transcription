@@ -301,6 +301,7 @@ const history = [];       // committed lines, max 3
 // Audio queue
 const audioQueue = [];
 let isPlaying = false;
+let currentAudioMime = 'audio/mpeg'; // updated per audio_info message from server
 
 // ── Login UI ───────────────────────────────────────────────────────────────
 const sessionInput = document.getElementById('session-id-input');
@@ -354,6 +355,10 @@ function connect() {
     if (msg.type === 'error') {
       showError(msg.message || 'Connection failed');
       ws.close();
+      return;
+    }
+    if (msg.type === 'audio_info') {
+      currentAudioMime = msg.mime_type;
       return;
     }
     if (msg.type === 'text') {
@@ -460,7 +465,7 @@ function playNext() {
   setAudioDot(true);
 
   const buffer = audioQueue.shift();
-  const blob = new Blob([buffer], { type: 'audio/mpeg' });
+  const blob = new Blob([buffer], { type: currentAudioMime });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   audio.onended = () => {

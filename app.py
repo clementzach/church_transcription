@@ -1,6 +1,7 @@
 from gevent import monkey
 monkey.patch_all()
 
+import io
 import os
 import json
 import logging
@@ -8,6 +9,7 @@ import queue
 import secrets
 import string
 import threading
+import wave
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sock import Sock
@@ -28,20 +30,55 @@ app = Flask(__name__)
 sock = Sock(app)
 
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
+
+# ── TTS Provider ───────────────────────────────────────────────────────────
+# Set TTS_PROVIDER=openai in .env to switch back to OpenAI TTS.
+# Default is 'google' (Gemini 2.5 Flash TTS).
+TTS_PROVIDER = os.getenv('TTS_PROVIDER', 'google').lower()
+
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+if TTS_PROVIDER == 'google':
+    from google import genai as _google_genai
+    from google.genai import types as _google_types
+    google_client = _google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 TRANSLATION_LANGS = ['es', 'ht', 'pt']
 
-# Voice and instructions per language for gpt-4o-mini-tts
-TTS_VOICES = {
+# ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
+OPENAI_TTS_VOICES = {
     'es': 'nova',
     'pt': 'shimmer',
     'ht': 'alloy',
 }
-TTS_INSTRUCTIONS = {
+OPENAI_TTS_INSTRUCTIONS = {
     'es': 'Speak naturally and clearly in Spanish.',
     'pt': 'Fale de forma natural e clara em português.',
     'ht': 'Ou pale kreyòl tankou yon natif natal',
+}
+
+# ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
+GOOGLE_TTS_VOICES = {
+    'es': 'Charon',
+    'pt': 'Aoede',
+    'ht': 'Kore',
+}
+GOOGLE_TTS_INSTRUCTIONS = {
+    'es': (
+        'You are a native Spanish speaker from Latin America. '
+        'Speak naturally and fluently with authentic Latin American Spanish '
+        'pronunciation, rhythm, and intonation. Sound warm, clear, and conversational.'
+    ),
+    'pt': (
+        'Você é um falante nativo de português brasileiro. '
+        'Fale de forma natural e fluente com pronúncia, ritmo e entonação '
+        'autênticos do português brasileiro. Soe caloroso, claro e conversacional.'
+    ),
+    'ht': (
+        'Ou se yon moun ki pale kreyòl ayisyen kòm lang manman ou. '
+        'Pale natirèlman ak aksan, ritem ak entònasyon otantik kreyòl ayisyen. '
+        'Sone cho, klè epi konvèsasyonèl.'
+    ),
 }
 
 # ── Session state (one active recording session at a time) ─────────────────
@@ -51,6 +88,53 @@ listener_registry = {lang: [] for lang in TRANSLATION_LANGS}  # lang -> [ws, ...
 
 # One TTS queue per language; maxsize=1 so we drop stale segments
 tts_queues = {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS}
+
+
+def _pcm_to_wav(pcm_data, sample_rate=24000, channels=1, sample_width=2):
+    """Wrap raw PCM bytes in a WAV container."""
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+    return buf.getvalue()
+
+
+def _tts_generate_audio(lang, text):
+    """Generate TTS audio using the configured provider.
+
+    Returns (audio_bytes, mime_type). Switch providers by setting
+    TTS_PROVIDER=openai or TTS_PROVIDER=google in .env.
+    """
+    if TTS_PROVIDER == 'openai':
+        response = openai_client.audio.speech.create(
+            model='gpt-4o-mini-tts',
+            voice=OPENAI_TTS_VOICES[lang],
+            input=text,
+            instructions=OPENAI_TTS_INSTRUCTIONS[lang],
+            response_format='mp3',
+        )
+        return response.content, 'audio/mpeg'
+
+    # Google Gemini 2.5 Flash TTS
+    response = google_client.models.generate_content(
+        model='gemini-2.5-flash-preview-tts',
+        contents=text,
+        config=_google_types.GenerateContentConfig(
+            response_modalities=['AUDIO'],
+            speech_config=_google_types.SpeechConfig(
+                voice_config=_google_types.VoiceConfig(
+                    prebuilt_voice_config=_google_types.PrebuiltVoiceConfig(
+                        voice_name=GOOGLE_TTS_VOICES[lang],
+                    )
+                ),
+            ),
+            system_instruction=GOOGLE_TTS_INSTRUCTIONS[lang],
+        ),
+    )
+    pcm_data = response.candidates[0].content.parts[0].inline_data.data
+    return _pcm_to_wav(pcm_data), 'audio/wav'
 
 
 def _generate_session_id():
@@ -79,8 +163,8 @@ def _enqueue_tts(lang, text):
 
 
 def _tts_worker(lang):
-    """Background thread per language: calls OpenAI TTS and sends audio to listeners."""
-    log.info("TTS worker started for lang=%s", lang)
+    """Background thread per language: calls TTS provider and sends audio to listeners."""
+    log.info("TTS worker started for lang=%s provider=%s", lang, TTS_PROVIDER)
     while True:
         text = tts_queues[lang].get()
         if text is None:
@@ -111,18 +195,11 @@ def _tts_worker(lang):
                 log.info("[tts:%s] No listeners, skipping TTS API call", lang)
                 continue
 
-        # Then generate and send audio
+        # Generate audio via the configured provider
         try:
-            log.info("[tts:%s] Calling OpenAI TTS", lang)
-            response = openai_client.audio.speech.create(
-                model='gpt-4o-mini-tts',
-                voice=TTS_VOICES[lang],
-                input=text,
-                instructions=TTS_INSTRUCTIONS[lang],
-                response_format='mp3',
-            )
-            audio_bytes = response.content
-            log.info("[tts:%s] Got %d bytes of audio", lang, len(audio_bytes))
+            log.info("[tts:%s] Calling %s TTS", lang, TTS_PROVIDER)
+            audio_bytes, mime_type = _tts_generate_audio(lang, text)
+            log.info("[tts:%s] Got %d bytes of audio (%s)", lang, len(audio_bytes), mime_type)
         except Exception as e:
             log.error("[tts:%s] TTS error: %s", lang, e)
             continue
@@ -132,6 +209,7 @@ def _tts_worker(lang):
         dead = []
         for ws_conn in listeners:
             try:
+                ws_conn.send(json.dumps({'type': 'audio_info', 'mime_type': mime_type}))
                 ws_conn.send(audio_bytes)
             except Exception:
                 dead.append(ws_conn)
