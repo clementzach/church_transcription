@@ -344,6 +344,7 @@ const GLADIA_CONFIG_BASE = {
 
 // ── State ──────────────────────────────────────────────────────────────────
 let selectedLang = 'en';
+let currentSessionId = null;
 let ws = null;
 let mediaRecorder = null;
 let audioContext = null;
@@ -499,7 +500,7 @@ async function startSession() {
     const data = await resp.json();
     gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
     if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
-    if (data.session_id) sessionIdEl.textContent = data.session_id;
+    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; }
   } catch (err) {
     alert('Failed to start session: ' + err.message);
     return;
@@ -526,7 +527,7 @@ async function startSession() {
 
   ws.addEventListener('open', async () => {
     console.log('[ws] Backend WebSocket open');
-    ws.send(gladiaWsUrl);
+    ws.send(JSON.stringify({ url: gladiaWsUrl, session_id: currentSessionId }));
     await startAudio();
   });
 

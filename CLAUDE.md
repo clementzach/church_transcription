@@ -19,7 +19,7 @@ Browser (broadcaster)
                               WebSocket /listen-stream ──► Browser (listener)
 ```
 
-**One active session at a time.** Session state (`current_session_id`, `listener_registry`, `session_start_time`) is global and protected by `_lock`.
+**Multiple concurrent sessions are supported.** All session state lives in the `sessions` dict (keyed by session ID), protected by `_lock`. Each session has its own `listener_registry`, `tts_queues`, and expiry timer — sessions are fully isolated.
 
 ## Key files
 

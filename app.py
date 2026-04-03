@@ -45,34 +45,17 @@ TTS_INSTRUCTIONS = {
     'ht': 'Ou pale kreyòl tankou yon natif natal',
 }
 
-# ── Session state (one active recording session at a time) ─────────────────
-_lock = threading.Lock()
-current_session_id = None
-listener_registry = {lang: [] for lang in TRANSLATION_LANGS}  # lang -> [ws, ...]
-session_start_time = None   # epoch seconds when the current session began
-
 SESSION_TIMEOUT_SECS = 2 * 3600  # 2 hours
 
-# One TTS queue per language; maxsize=1 so we drop stale segments
-tts_queues = {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS}
-
-_session_timer = None  # threading.Timer that expires the current session
-
-
-def _expire_session():
-    """Called after SESSION_TIMEOUT_SECS to close all listener connections."""
-    global current_session_id
-    log.info("Session timed out after %d seconds; closing all listener connections", SESSION_TIMEOUT_SECS)
-    with _lock:
-        current_session_id = None
-        for lang in TRANSLATION_LANGS:
-            for ws_conn in list(listener_registry.get(lang, [])):
-                try:
-                    ws_conn.send(json.dumps({'type': 'error', 'message': 'Session expired (2-hour limit reached)'}))
-                    ws_conn.close()
-                except Exception:
-                    pass
-            listener_registry[lang] = []
+# ── Session state ────────────────────────────────────────────────────────────
+# sessions[session_id] = {
+#   'start_time': float,
+#   'listener_registry': {lang: [ws, ...]},
+#   'tts_queues': {lang: Queue(maxsize=1)},
+#   'timer': threading.Timer | None,
+# }
+_lock = threading.Lock()
+sessions = {}
 
 
 def _generate_session_id():
@@ -80,14 +63,46 @@ def _generate_session_id():
     return ''.join(secrets.choice(chars) for _ in range(6))
 
 
-def _enqueue_tts(lang, text):
-    # Skip if session has expired or no listeners are connected for this language
+def _expire_session(session_id):
+    """Called by each session's timer after SESSION_TIMEOUT_SECS."""
+    log.info("Session %s timed out after %ds", session_id, SESSION_TIMEOUT_SECS)
     with _lock:
-        if session_start_time is not None and (time.time() - session_start_time) > SESSION_TIMEOUT_SECS:
+        session = sessions.pop(session_id, None)
+    if session is None:
+        return
+    # Stop this session's TTS workers
+    for lang in TRANSLATION_LANGS:
+        q = session['tts_queues'][lang]
+        try:
+            q.put_nowait(None)
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(None)
+            except queue.Full:
+                pass
+    # Notify and close listener WebSockets
+    for lang in TRANSLATION_LANGS:
+        for ws_conn in list(session['listener_registry'].get(lang, [])):
+            try:
+                ws_conn.send(json.dumps({'type': 'error', 'message': 'Session expired (2-hour limit reached)'}))
+                ws_conn.close()
+            except Exception:
+                pass
+        session['listener_registry'][lang] = []
+
+
+def _enqueue_tts(session_id, lang, text):
+    with _lock:
+        session = sessions.get(session_id)
+        if not session:
             return
-        if not listener_registry.get(lang):
+        if not session['listener_registry'].get(lang):
             return
-    q = tts_queues[lang]
+    q = session['tts_queues'][lang]
     try:
         q.put_nowait(text)
     except queue.Full:
@@ -102,19 +117,30 @@ def _enqueue_tts(lang, text):
             pass
 
 
-def _tts_worker(lang):
-    """Background thread per language: calls OpenAI TTS and sends audio to listeners."""
-    log.info("TTS worker started for lang=%s", lang)
+def _tts_worker(session_id, lang):
+    """Background thread per (session, language): calls OpenAI TTS and broadcasts to listeners."""
+    log.info("TTS worker started for session=%s lang=%s", session_id, lang)
+    # Hold a reference to this session's queue so we can block on it even after
+    # the session is removed from the dict (expiry will enqueue None to unblock us).
+    with _lock:
+        session = sessions.get(session_id)
+        if not session:
+            return
+        q = session['tts_queues'][lang]
+
     while True:
-        text = tts_queues[lang].get()
+        text = q.get()
         if text is None:
             break
 
-        log.info("[tts:%s] Sending text to listeners: %.60s", lang, text)
+        log.info("[tts:%s:%s] Sending text to listeners: %.60s", session_id, lang, text)
 
-        # First send the text so the listener can display it immediately
+        # Send text so the listener can display it immediately
         with _lock:
-            listeners = list(listener_registry.get(lang, []))
+            session = sessions.get(session_id)
+            if not session:
+                break
+            listeners = list(session['listener_registry'].get(lang, []))
         dead = []
         for ws_conn in listeners:
             try:
@@ -123,21 +149,24 @@ def _tts_worker(lang):
                 dead.append(ws_conn)
         if dead:
             with _lock:
-                for d in dead:
-                    try:
-                        listener_registry[lang].remove(d)
-                    except ValueError:
-                        pass
+                session = sessions.get(session_id)
+                if session:
+                    for d in dead:
+                        try:
+                            session['listener_registry'][lang].remove(d)
+                        except ValueError:
+                            pass
 
         # Skip API call if all listeners disconnected while text was queued
         with _lock:
-            if not listener_registry.get(lang):
-                log.info("[tts:%s] No listeners, skipping TTS API call", lang)
+            session = sessions.get(session_id)
+            if not session or not session['listener_registry'].get(lang):
+                log.info("[tts:%s:%s] No listeners, skipping TTS API call", session_id, lang)
                 continue
 
-        # Then generate and send audio
+        # Generate and broadcast audio
         try:
-            log.info("[tts:%s] Calling OpenAI TTS", lang)
+            log.info("[tts:%s:%s] Calling OpenAI TTS", session_id, lang)
             response = openai_client.audio.speech.create(
                 model='gpt-4o-mini-tts',
                 voice=TTS_VOICES[lang],
@@ -146,13 +175,16 @@ def _tts_worker(lang):
                 response_format='mp3',
             )
             audio_bytes = response.content
-            log.info("[tts:%s] Got %d bytes of audio", lang, len(audio_bytes))
+            log.info("[tts:%s:%s] Got %d bytes of audio", session_id, lang, len(audio_bytes))
         except Exception as e:
-            log.error("[tts:%s] TTS error: %s", lang, e)
+            log.error("[tts:%s:%s] TTS error: %s", session_id, lang, e)
             continue
 
         with _lock:
-            listeners = list(listener_registry.get(lang, []))
+            session = sessions.get(session_id)
+            if not session:
+                continue
+            listeners = list(session['listener_registry'].get(lang, []))
         dead = []
         for ws_conn in listeners:
             try:
@@ -161,16 +193,15 @@ def _tts_worker(lang):
                 dead.append(ws_conn)
         if dead:
             with _lock:
-                for d in dead:
-                    try:
-                        listener_registry[lang].remove(d)
-                    except ValueError:
-                        pass
+                session = sessions.get(session_id)
+                if session:
+                    for d in dead:
+                        try:
+                            session['listener_registry'][lang].remove(d)
+                        except ValueError:
+                            pass
 
-
-# Start one TTS worker thread per translation language
-for _lang in TRANSLATION_LANGS:
-    threading.Thread(target=_tts_worker, args=(_lang,), daemon=True).start()
+    log.info("TTS worker stopped for session=%s lang=%s", session_id, lang)
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -187,7 +218,6 @@ def listen():
 
 @app.route("/init-session", methods=["POST"])
 def init_session():
-    global current_session_id, session_start_time, _session_timer
     config = request.get_json()
     log.info("init-session called, config=%s", json.dumps(config))
     resp = requests.post(
@@ -202,21 +232,31 @@ def init_session():
     log.info("Gladia /v2/live response: status=%d", resp.status_code)
     if resp.ok:
         session_id = _generate_session_id()
+        session = {
+            'start_time': time.time(),
+            'listener_registry': {lang: [] for lang in TRANSLATION_LANGS},
+            'tts_queues': {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS},
+            'timer': None,
+        }
         with _lock:
-            current_session_id = session_id
-            session_start_time = time.time()
-            for lang in TRANSLATION_LANGS:
-                listener_registry[lang] = []
-        # Cancel any existing session timer and start a new one
-        if _session_timer is not None:
-            _session_timer.cancel()
-        _session_timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session)
-        _session_timer.daemon = True
-        _session_timer.start()
-        log.info("Session created: id=%s timeout=%ds gladia_url=%s",
-                 session_id, SESSION_TIMEOUT_SECS, resp.json().get('url') or resp.json().get('websocket_url'))
+            sessions[session_id] = session
+
+        # Start TTS workers for this session
+        for lang in TRANSLATION_LANGS:
+            threading.Thread(
+                target=_tts_worker, args=(session_id, lang), daemon=True
+            ).start()
+
+        # Schedule automatic expiry tied to this session
+        timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
+        timer.daemon = True
+        timer.start()
+        session['timer'] = timer
+
         data = resp.json()
         data['session_id'] = session_id
+        log.info("Session created: id=%s timeout=%ds gladia_url=%s",
+                 session_id, SESSION_TIMEOUT_SECS, data.get('url') or data.get('websocket_url'))
         return jsonify(data)
     log.error("Gladia init failed: %d %s", resp.status_code, resp.text)
     return (resp.content, resp.status_code, {"Content-Type": "application/json"})
@@ -224,14 +264,36 @@ def init_session():
 
 @sock.route("/stream")
 def stream(browser_ws):
-    # First message from browser: Gladia WebSocket URL
-    gladia_url = browser_ws.receive()
+    # First message from browser: JSON with Gladia URL and session_id
+    raw_first = browser_ws.receive()
+    gladia_url = None
+    session_id = None
+    try:
+        first_msg = json.loads(raw_first)
+        gladia_url = first_msg.get('url', '')
+        session_id = first_msg.get('session_id', '')
+    except Exception:
+        # Legacy fallback: plain URL string (no session routing)
+        gladia_url = raw_first
+        session_id = None
+
     if not gladia_url or not gladia_url.startswith("wss://"):
         log.error("stream: invalid or missing Gladia URL: %r", gladia_url)
         browser_ws.close()
         return
 
-    log.info("stream: connecting to Gladia at %s", gladia_url)
+    if not session_id:
+        log.error("stream: missing session_id in first message")
+        browser_ws.close()
+        return
+
+    with _lock:
+        if session_id not in sessions:
+            log.error("stream: unknown session_id=%s", session_id)
+            browser_ws.close()
+            return
+
+    log.info("stream: session=%s connecting to Gladia at %s", session_id, gladia_url)
     try:
         gladia_ws = websocket.create_connection(gladia_url)
     except Exception as e:
@@ -292,8 +354,8 @@ def stream(browser_ws):
                     data = msg.get('data', {})
                     lang = (data.get('target_language') or '').lower()
                     text = (data.get('translated_utterance') or {}).get('text', '')
-                    if lang in tts_queues and text:
-                        _enqueue_tts(lang, text)
+                    if lang in TRANSLATION_LANGS and text:
+                        _enqueue_tts(session_id, lang, text)
             except Exception:
                 pass
     finally:
@@ -321,13 +383,15 @@ def listen_stream(ws_conn):
     log.info("listen-stream: session_id=%s lang=%s", session_id, lang)
 
     with _lock:
-        if session_id != current_session_id or lang not in listener_registry:
-            log.warning("listen-stream: invalid session_id=%s (current=%s) or lang=%s", session_id, current_session_id, lang)
+        session = sessions.get(session_id)
+        if not session or lang not in TRANSLATION_LANGS:
+            log.warning("listen-stream: invalid session_id=%s or lang=%s", session_id, lang)
             ws_conn.send(json.dumps({'type': 'error', 'message': 'Invalid session ID or language'}))
             ws_conn.close()
             return
-        listener_registry[lang].append(ws_conn)
-        log.info("listen-stream: registered listener for lang=%s (total=%d)", lang, len(listener_registry[lang]))
+        session['listener_registry'][lang].append(ws_conn)
+        log.info("listen-stream: registered listener for session=%s lang=%s (total=%d)",
+                 session_id, lang, len(session['listener_registry'][lang]))
 
     # Hold connection open; remove on disconnect
     try:
@@ -337,11 +401,13 @@ def listen_stream(ws_conn):
                 break
     finally:
         with _lock:
-            try:
-                listener_registry[lang].remove(ws_conn)
-                log.info("listen-stream: removed listener for lang=%s", lang)
-            except ValueError:
-                pass
+            session = sessions.get(session_id)
+            if session:
+                try:
+                    session['listener_registry'][lang].remove(ws_conn)
+                    log.info("listen-stream: removed listener for session=%s lang=%s", session_id, lang)
+                except ValueError:
+                    pass
 
 
 if __name__ == "__main__":
