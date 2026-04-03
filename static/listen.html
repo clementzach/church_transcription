@@ -205,6 +205,20 @@
     50%       { opacity: 0.35; }
   }
 
+  #start-audio-btn {
+    padding: 3px 10px;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+    background: #f5f5f5;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #444;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  #start-audio-btn:hover { background: #e8e8e8; border-color: #bbb; }
+
   /* ── Caption panel ── */
   #caption-panel {
     flex: 1;
@@ -279,6 +293,7 @@
     <span id="listen-lang-tag"></span>
     <span id="listen-session-tag"></span>
     <div id="audio-indicator">
+      <button id="start-audio-btn" onclick="unlockAudio()">&#9654; Start Audio</button>
       <div id="audio-dot"></div>
       <span id="audio-label">Audio</span>
     </div>
@@ -301,6 +316,7 @@ const history = [];       // committed lines, max 3
 // Audio queue
 const audioQueue = [];
 let isPlaying = false;
+let audioUnlocked = false;  // requires user gesture before playback
 
 // ── Login UI ───────────────────────────────────────────────────────────────
 const sessionInput = document.getElementById('session-id-input');
@@ -443,15 +459,21 @@ function escHtml(s) {
 }
 
 // ── Audio queue ────────────────────────────────────────────────────────────
+function unlockAudio() {
+  audioUnlocked = true;
+  document.getElementById('start-audio-btn').style.display = 'none';
+  if (!isPlaying && audioQueue.length > 0) playNext();
+}
+
 function enqueueAudio(buffer) {
   // Drop oldest queued item if behind by more than 1
   if (audioQueue.length > 1) audioQueue.shift();
   audioQueue.push(buffer);
-  if (!isPlaying) playNext();
+  if (!isPlaying && audioUnlocked) playNext();
 }
 
 function playNext() {
-  if (audioQueue.length === 0) {
+  if (!audioUnlocked || audioQueue.length === 0) {
     isPlaying = false;
     setAudioDot(false);
     return;
@@ -471,7 +493,10 @@ function playNext() {
     URL.revokeObjectURL(url);
     playNext();
   };
-  audio.play().catch(() => playNext());
+  audio.play().catch(() => {
+    URL.revokeObjectURL(url);
+    playNext();
+  });
 }
 
 function setAudioDot(playing) {
