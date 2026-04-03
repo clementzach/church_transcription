@@ -11,6 +11,7 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
+    --auto: #6b7280;
     --en: #3b82f6;
     --es: #f97316;
     --ht: #22c55e;
@@ -71,6 +72,7 @@
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
+  .lang-btn[data-lang="auto"] { --c: var(--auto); }
   .lang-btn[data-lang="en"] { --c: var(--en); }
   .lang-btn[data-lang="es"] { --c: var(--es); }
   .lang-btn[data-lang="ht"] { --c: var(--ht); }
@@ -278,7 +280,8 @@
   <div id="lang-section">
     <span id="lang-label">Toggle spoken language</span>
     <div id="lang-toggle">
-      <button class="lang-btn active" data-lang="en">EN</button>
+      <button class="lang-btn active" data-lang="auto">AUTO</button>
+      <button class="lang-btn" data-lang="en">EN</button>
       <button class="lang-btn" data-lang="es">ES</button>
       <button class="lang-btn" data-lang="ht">HT</button>
       <button class="lang-btn" data-lang="pt">PT</button>
@@ -334,6 +337,7 @@
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
 const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh'];
+const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh']; // non-English target languages
 const GLADIA_CONFIG_BASE = {
   encoding: 'wav/pcm',
   sample_rate: 16000,
@@ -352,7 +356,8 @@ const GLADIA_CONFIG_BASE = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
-let selectedLang = 'en';
+let selectedLang = 'auto';
+let detectedSourceLang = 'en'; // updated from Gladia transcript messages in auto mode
 let currentSessionId = null;
 let ws = null;
 let mediaRecorder = null;
@@ -364,9 +369,9 @@ let isRunning = false;
 let reconnectTimer = null;
 
 // Per-panel history: array of up to 3 committed lines
-const history = { en: [], es: [], ht: [], pt: [] };
+const history = { en: [], es: [], ht: [], pt: [], zh: [] };
 // Current partial text per panel (only source panel uses it)
-const partials = { en: '', es: '', ht: '', pt: '' };
+const partials = { en: '', es: '', ht: '', pt: '', zh: '' };
 
 // ── UI refs ────────────────────────────────────────────────────────────────
 const startBtn      = document.getElementById('start-btn');
@@ -415,7 +420,8 @@ stopBtn.addEventListener('click', () => stopSession(true));
 function renderPanel(lang) {
   const container = document.getElementById('lines-' + lang);
   const h = history[lang];
-  const partial = (lang === selectedLang) ? partials[lang] : '';
+  const srcLang = selectedLang === 'auto' ? detectedSourceLang : selectedLang;
+  const partial = (lang === srcLang) ? partials[lang] : '';
   const lines = [];
 
   // Build from oldest to newest (max 3 committed)
@@ -462,13 +468,15 @@ function commitLine(lang, text) {
 }
 
 function setPartial(lang, text) {
-  if (lang !== selectedLang) return; // no partials on translation panels
+  const srcLang = selectedLang === 'auto' ? detectedSourceLang : selectedLang;
+  if (lang !== srcLang) return; // no partials on translation panels
   partials[lang] = text;
   renderPanel(lang);
   bottomPartial.textContent = text;
 }
 
 function clearPanels() {
+  detectedSourceLang = 'en';
   ALL_LANGS.forEach(l => {
     history[l] = [];
     partials[l] = '';
@@ -484,13 +492,14 @@ async function startSession() {
   clearReconnectTimer();
 
   // Build config
-  const targetLangs = ALL_LANGS.filter(l => l !== selectedLang);
   const config = JSON.parse(JSON.stringify(GLADIA_CONFIG_BASE));
-  config.language_config = {
-    languages: [selectedLang],
-    code_switching: false
-  };
-  config.realtime_processing.translation_config.target_languages = targetLangs;
+  if (selectedLang === 'auto') {
+    config.language_config = { languages: [], code_switching: false };
+    config.realtime_processing.translation_config.target_languages = TRANSLATION_LANGS.slice();
+  } else {
+    config.language_config = { languages: [selectedLang], code_switching: false };
+    config.realtime_processing.translation_config.target_languages = ALL_LANGS.filter(l => l !== selectedLang);
+  }
 
   // Init session with Gladia
   let gladiaWsUrl;
@@ -651,11 +660,16 @@ function handleGladiaMessage(msg) {
     const text = utterance.text || '';
     const isFinal = utterance.is_final === true || data.is_final === true;
 
+    if (selectedLang === 'auto' && utterance.language) {
+      detectedSourceLang = utterance.language.toLowerCase();
+    }
+    const routeLang = selectedLang === 'auto' ? detectedSourceLang : selectedLang;
+
     if (isFinal) {
-      commitLine(selectedLang, text);
+      commitLine(routeLang, text);
       bottomPartial.textContent = '';
     } else {
-      setPartial(selectedLang, text);
+      setPartial(routeLang, text);
     }
     return;
   }
