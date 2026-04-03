@@ -6,3 +6,4 @@ websocket-client
 gunicorn
 gevent
 openai
+google-genai

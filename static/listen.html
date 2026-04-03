@@ -15,6 +15,7 @@
     --es: #f97316;
     --ht: #22c55e;
     --pt: #a855f7;
+    --zh: #06b6d4;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -109,6 +110,7 @@
   .lang-opt[data-lang="es"] { --c: var(--es); }
   .lang-opt[data-lang="ht"] { --c: var(--ht); }
   .lang-opt[data-lang="pt"] { --c: var(--pt); }
+  .lang-opt[data-lang="zh"] { --c: var(--zh); }
   .lang-opt.selected {
     background: var(--c);
     color: #fff;
@@ -273,6 +275,7 @@
         <button class="lang-opt" data-lang="es">ES</button>
         <button class="lang-opt" data-lang="ht">HT</button>
         <button class="lang-opt" data-lang="pt">PT</button>
+        <button class="lang-opt" data-lang="zh">ZH</button>
       </div>
       <div id="lang-names">
         <span class="lang-name">Spanish</span>
@@ -306,8 +309,8 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7' };
-const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese' };
+const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7', zh: '#06b6d4' };
+const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh: 'Mandarin' };
 
 let selectedLang = null;
 let ws = null;
@@ -316,6 +319,7 @@ const history = [];       // committed lines, max 3
 // Audio queue
 const audioQueue = [];
 let isPlaying = false;
+let currentAudioMime = 'audio/mpeg'; // updated per audio_info message from server
 let audioUnlocked = false;  // requires user gesture before playback
 
 // ── Login UI ───────────────────────────────────────────────────────────────
@@ -370,6 +374,10 @@ function connect() {
     if (msg.type === 'error') {
       showError(msg.message || 'Connection failed');
       ws.close();
+      return;
+    }
+    if (msg.type === 'audio_info') {
+      currentAudioMime = msg.mime_type;
       return;
     }
     if (msg.type === 'text') {
@@ -482,7 +490,7 @@ function playNext() {
   setAudioDot(true);
 
   const buffer = audioQueue.shift();
-  const blob = new Blob([buffer], { type: 'audio/mpeg' });
+  const blob = new Blob([buffer], { type: currentAudioMime });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   audio.onended = () => {
