@@ -494,7 +494,7 @@ async function startSession() {
   // Build config
   const config = JSON.parse(JSON.stringify(GLADIA_CONFIG_BASE));
   if (selectedLang === 'auto') {
-    config.language_config = { languages: [], code_switching: false };
+    config.language_config = { languages: ALL_LANGS.slice(), code_switching: false };
     config.realtime_processing.translation_config.target_languages = TRANSLATION_LANGS.slice();
   } else {
     config.language_config = { languages: [selectedLang], code_switching: false };
