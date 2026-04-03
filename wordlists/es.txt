@@ -1,0 +1,95 @@
+# Spanish profanity word list
+# Only words that are 100% profane in every context.
+# If a word needs context to be an insult, use the full compound phrase instead.
+# Covers both Spain and Latin American dialects.
+
+# ── F-word equivalents ────────────────────────────────────────────────────────
+joder
+jodido
+jodida
+jodidos
+jodidas
+follar
+follado
+follada
+chingar       # Mexico/Central America
+chingada
+chingado
+chingados
+chingadas
+chingadera
+chingaderas
+
+# ── Shit ──────────────────────────────────────────────────────────────────────
+mierda
+mierdas
+cagar
+# cagada/cagadas/cagado removed — used as "blunder/mistake" in everyday informal speech
+
+# ── Bitch / whore ─────────────────────────────────────────────────────────────
+puta
+puto
+putos
+putas
+putada
+putazo
+furcia
+# ramera removed — appears in Spanish Bible translations (harlot)
+# zorra/zorras removed — primary meaning is "fox" (the animal)
+
+# ── C-word ────────────────────────────────────────────────────────────────────
+coño
+coñazo
+
+# ── Genitalia ─────────────────────────────────────────────────────────────────
+verga
+polla
+picha
+cipote
+cojones
+# huevos removed — primary meaning is "eggs" (food)
+# pito removed — primary meaning is "whistle/horn"
+# paja/pajero/pajera/pajear removed — paja = straw (appears throughout scripture);
+#   pajero is also the Mitsubishi Pajero brand name
+
+# ── A-word ────────────────────────────────────────────────────────────────────
+culo
+culero
+culera
+culeros
+
+# ── Slurs ─────────────────────────────────────────────────────────────────────
+maricón
+maricona
+maricones
+mariconazo
+cabrón
+cabrona
+cabrones
+gilipollas
+pendejo
+pendeja
+pendejos
+pendejadas
+# gonorrea removed — medical name for the STD
+# mamón/mamona removed — nursing infant; tropical fruit
+# subnormal/imbécil removed — clinical/standard vocabulary
+# coger/cogido removed — means "to grab/take" throughout Spain
+
+# ── Compound insults ──────────────────────────────────────────────────────────
+hijo de puta
+hija de puta
+hijoputa
+chinga tu madre
+tu puta madre
+me cago en tu madre
+hijo de la chingada
+vete a la mierda
+vete al carajo       # carajo standalone removed — common exclamation; covered by this phrase
+cojonudo
+me cago en dios      # blasphemous
+me cago en la hostia # blasphemous; hostia standalone removed — Eucharist wafer ("la hostia" = the host)
+puto drogadicto
+
+# ── Pinche ────────────────────────────────────────────────────────────────────
+# pinche removed — means "kitchen assistant" in Spain; only vulgar in Mexico

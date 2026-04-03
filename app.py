@@ -9,6 +9,7 @@ import queue
 import secrets
 import string
 import threading
+import time
 import wave
 import requests
 from flask import Flask, request, jsonify, send_from_directory
@@ -16,6 +17,7 @@ from flask_sock import Sock
 from dotenv import load_dotenv
 import websocket
 from openai import OpenAI
+from filter import filter_text as _filter_text
 
 load_dotenv()
 
@@ -81,13 +83,16 @@ GOOGLE_TTS_INSTRUCTIONS = {
     ),
 }
 
-# ── Session state (one active recording session at a time) ─────────────────
+# ── Session state ────────────────────────────────────────────────────────────
+# sessions[session_id] = {
+#   'start_time': float,
+#   'listener_registry': {lang: [ws, ...]},
+#   'tts_queues': {lang: Queue(maxsize=1)},
+#   'timer': threading.Timer | None,
+# }
+SESSION_TIMEOUT_SECS = 2 * 3600  # 2 hours
 _lock = threading.Lock()
-current_session_id = None
-listener_registry = {lang: [] for lang in TRANSLATION_LANGS}  # lang -> [ws, ...]
-
-# One TTS queue per language; maxsize=1 so we drop stale segments
-tts_queues = {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS}
+sessions = {}
 
 
 def _pcm_to_wav(pcm_data, sample_rate=24000, channels=1, sample_width=2):
@@ -142,12 +147,46 @@ def _generate_session_id():
     return ''.join(secrets.choice(chars) for _ in range(6))
 
 
-def _enqueue_tts(lang, text):
-    # Skip entirely if no listeners are connected for this language
+def _expire_session(session_id):
+    """Called by each session's timer after SESSION_TIMEOUT_SECS."""
+    log.info("Session %s timed out after %ds", session_id, SESSION_TIMEOUT_SECS)
     with _lock:
-        if not listener_registry.get(lang):
+        session = sessions.pop(session_id, None)
+    if session is None:
+        return
+    # Stop this session's TTS workers
+    for lang in TRANSLATION_LANGS:
+        q = session['tts_queues'][lang]
+        try:
+            q.put_nowait(None)
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(None)
+            except queue.Full:
+                pass
+    # Notify and close listener WebSockets
+    for lang in TRANSLATION_LANGS:
+        for ws_conn in list(session['listener_registry'].get(lang, [])):
+            try:
+                ws_conn.send(json.dumps({'type': 'error', 'message': 'Session expired (2-hour limit reached)'}))
+                ws_conn.close()
+            except Exception:
+                pass
+        session['listener_registry'][lang] = []
+
+
+def _enqueue_tts(session_id, lang, text):
+    with _lock:
+        session = sessions.get(session_id)
+        if not session:
             return
-    q = tts_queues[lang]
+        if not session['listener_registry'].get(lang):
+            return
+    q = session['tts_queues'][lang]
     try:
         q.put_nowait(text)
     except queue.Full:
@@ -162,19 +201,30 @@ def _enqueue_tts(lang, text):
             pass
 
 
-def _tts_worker(lang):
-    """Background thread per language: calls TTS provider and sends audio to listeners."""
-    log.info("TTS worker started for lang=%s provider=%s", lang, TTS_PROVIDER)
+def _tts_worker(session_id, lang):
+    """Background thread per (session, language): calls TTS provider and broadcasts to listeners."""
+    log.info("TTS worker started for session=%s lang=%s provider=%s", session_id, lang, TTS_PROVIDER)
+    # Hold a reference to this session's queue so we can block on it even after
+    # the session is removed from the dict (expiry will enqueue None to unblock us).
+    with _lock:
+        session = sessions.get(session_id)
+        if not session:
+            return
+        q = session['tts_queues'][lang]
+
     while True:
-        text = tts_queues[lang].get()
+        text = q.get()
         if text is None:
             break
 
-        log.info("[tts:%s] Sending text to listeners: %.60s", lang, text)
+        log.info("[tts:%s:%s] Sending text to listeners: %.60s", session_id, lang, text)
 
-        # First send the text so the listener can display it immediately
+        # Send text so the listener can display it immediately
         with _lock:
-            listeners = list(listener_registry.get(lang, []))
+            session = sessions.get(session_id)
+            if not session:
+                break
+            listeners = list(session['listener_registry'].get(lang, []))
         dead = []
         for ws_conn in listeners:
             try:
@@ -183,29 +233,35 @@ def _tts_worker(lang):
                 dead.append(ws_conn)
         if dead:
             with _lock:
-                for d in dead:
-                    try:
-                        listener_registry[lang].remove(d)
-                    except ValueError:
-                        pass
+                session = sessions.get(session_id)
+                if session:
+                    for d in dead:
+                        try:
+                            session['listener_registry'][lang].remove(d)
+                        except ValueError:
+                            pass
 
         # Skip API call if all listeners disconnected while text was queued
         with _lock:
-            if not listener_registry.get(lang):
-                log.info("[tts:%s] No listeners, skipping TTS API call", lang)
+            session = sessions.get(session_id)
+            if not session or not session['listener_registry'].get(lang):
+                log.info("[tts:%s:%s] No listeners, skipping TTS API call", session_id, lang)
                 continue
 
         # Generate audio via the configured provider
         try:
-            log.info("[tts:%s] Calling %s TTS", lang, TTS_PROVIDER)
+            log.info("[tts:%s:%s] Calling %s TTS", session_id, lang, TTS_PROVIDER)
             audio_bytes, mime_type = _tts_generate_audio(lang, text)
-            log.info("[tts:%s] Got %d bytes of audio (%s)", lang, len(audio_bytes), mime_type)
+            log.info("[tts:%s:%s] Got %d bytes of audio (%s)", session_id, lang, len(audio_bytes), mime_type)
         except Exception as e:
-            log.error("[tts:%s] TTS error: %s", lang, e)
+            log.error("[tts:%s:%s] TTS error: %s", session_id, lang, e)
             continue
 
         with _lock:
-            listeners = list(listener_registry.get(lang, []))
+            session = sessions.get(session_id)
+            if not session:
+                continue
+            listeners = list(session['listener_registry'].get(lang, []))
         dead = []
         for ws_conn in listeners:
             try:
@@ -215,16 +271,15 @@ def _tts_worker(lang):
                 dead.append(ws_conn)
         if dead:
             with _lock:
-                for d in dead:
-                    try:
-                        listener_registry[lang].remove(d)
-                    except ValueError:
-                        pass
+                session = sessions.get(session_id)
+                if session:
+                    for d in dead:
+                        try:
+                            session['listener_registry'][lang].remove(d)
+                        except ValueError:
+                            pass
 
-
-# Start one TTS worker thread per translation language
-for _lang in TRANSLATION_LANGS:
-    threading.Thread(target=_tts_worker, args=(_lang,), daemon=True).start()
+    log.info("TTS worker stopped for session=%s lang=%s", session_id, lang)
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -241,7 +296,6 @@ def listen():
 
 @app.route("/init-session", methods=["POST"])
 def init_session():
-    global current_session_id
     config = request.get_json()
     log.info("init-session called, config=%s", json.dumps(config))
     resp = requests.post(
@@ -256,13 +310,31 @@ def init_session():
     log.info("Gladia /v2/live response: status=%d", resp.status_code)
     if resp.ok:
         session_id = _generate_session_id()
+        session = {
+            'start_time': time.time(),
+            'listener_registry': {lang: [] for lang in TRANSLATION_LANGS},
+            'tts_queues': {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS},
+            'timer': None,
+        }
         with _lock:
-            current_session_id = session_id
-            for lang in TRANSLATION_LANGS:
-                listener_registry[lang] = []
+            sessions[session_id] = session
+
+        # Start TTS workers for this session
+        for lang in TRANSLATION_LANGS:
+            threading.Thread(
+                target=_tts_worker, args=(session_id, lang), daemon=True
+            ).start()
+
+        # Schedule automatic expiry tied to this session
+        timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
+        timer.daemon = True
+        timer.start()
+        session['timer'] = timer
+
         data = resp.json()
         data['session_id'] = session_id
-        log.info("Session created: id=%s gladia_url=%s", session_id, data.get('url') or data.get('websocket_url'))
+        log.info("Session created: id=%s timeout=%ds gladia_url=%s",
+                 session_id, SESSION_TIMEOUT_SECS, data.get('url') or data.get('websocket_url'))
         return jsonify(data)
     log.error("Gladia init failed: %d %s", resp.status_code, resp.text)
     return (resp.content, resp.status_code, {"Content-Type": "application/json"})
@@ -270,14 +342,36 @@ def init_session():
 
 @sock.route("/stream")
 def stream(browser_ws):
-    # First message from browser: Gladia WebSocket URL
-    gladia_url = browser_ws.receive()
+    # First message from browser: JSON with Gladia URL and session_id
+    raw_first = browser_ws.receive()
+    gladia_url = None
+    session_id = None
+    try:
+        first_msg = json.loads(raw_first)
+        gladia_url = first_msg.get('url', '')
+        session_id = first_msg.get('session_id', '')
+    except Exception:
+        # Legacy fallback: plain URL string (no session routing)
+        gladia_url = raw_first
+        session_id = None
+
     if not gladia_url or not gladia_url.startswith("wss://"):
         log.error("stream: invalid or missing Gladia URL: %r", gladia_url)
         browser_ws.close()
         return
 
-    log.info("stream: connecting to Gladia at %s", gladia_url)
+    if not session_id:
+        log.error("stream: missing session_id in first message")
+        browser_ws.close()
+        return
+
+    with _lock:
+        if session_id not in sessions:
+            log.error("stream: unknown session_id=%s", session_id)
+            browser_ws.close()
+            return
+
+    log.info("stream: session=%s connecting to Gladia at %s", session_id, gladia_url)
     try:
         gladia_ws = websocket.create_connection(gladia_url)
     except Exception as e:
@@ -322,26 +416,42 @@ def stream(browser_ws):
                 log.info("stream: Gladia closed connection")
                 break
             gladia_msgs += 1
-            # Relay to recorder browser (unchanged)
-            try:
-                browser_ws.send(raw)
-            except Exception as e:
-                log.warning("stream: browser send error: %s", e)
-                break
-            # Intercept committed translation messages to trigger TTS
+
+            # Parse the message, filter any text fields, then forward to browser.
+            # Filtering here means the recorder display and listeners all see clean text.
+            to_send = raw
             try:
                 msg = json.loads(raw)
                 msg_type = msg.get('type')
                 if gladia_msgs <= 5 or msg_type in ('transcript', 'translation'):
                     log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
-                if msg_type == 'translation':
+
+                if msg_type == 'transcript':
+                    utterance = (msg.get('data') or {}).get('utterance') or {}
+                    if utterance.get('text'):
+                        utterance['text'] = _filter_text(utterance['text'])
+                        to_send = json.dumps(msg)
+
+                elif msg_type == 'translation':
                     data = msg.get('data', {})
+                    translated = data.get('translated_utterance') or {}
+                    if translated.get('text'):
+                        translated['text'] = _filter_text(translated['text'])
+                        to_send = json.dumps(msg)
+                    # Enqueue filtered text for TTS/listener delivery
                     lang = (data.get('target_language') or '').lower()
-                    text = (data.get('translated_utterance') or {}).get('text', '')
-                    if lang in tts_queues and text:
-                        _enqueue_tts(lang, text)
+                    text = translated.get('text', '')
+                    if lang in TRANSLATION_LANGS and text:
+                        _enqueue_tts(session_id, lang, text)
             except Exception:
-                pass
+                pass  # on any parse error, forward the original raw message
+
+            try:
+                browser_ws.send(to_send)
+            except Exception as e:
+                log.warning("stream: browser send error: %s", e)
+                break
+
     finally:
         log.info("stream: closing (audio_chunks=%d, gladia_msgs=%d)", audio_chunks, gladia_msgs)
         stop_event.set()
@@ -367,13 +477,15 @@ def listen_stream(ws_conn):
     log.info("listen-stream: session_id=%s lang=%s", session_id, lang)
 
     with _lock:
-        if session_id != current_session_id or lang not in listener_registry:
-            log.warning("listen-stream: invalid session_id=%s (current=%s) or lang=%s", session_id, current_session_id, lang)
+        session = sessions.get(session_id)
+        if not session or lang not in TRANSLATION_LANGS:
+            log.warning("listen-stream: invalid session_id=%s or lang=%s", session_id, lang)
             ws_conn.send(json.dumps({'type': 'error', 'message': 'Invalid session ID or language'}))
             ws_conn.close()
             return
-        listener_registry[lang].append(ws_conn)
-        log.info("listen-stream: registered listener for lang=%s (total=%d)", lang, len(listener_registry[lang]))
+        session['listener_registry'][lang].append(ws_conn)
+        log.info("listen-stream: registered listener for session=%s lang=%s (total=%d)",
+                 session_id, lang, len(session['listener_registry'][lang]))
 
     # Hold connection open; remove on disconnect
     try:
@@ -383,11 +495,13 @@ def listen_stream(ws_conn):
                 break
     finally:
         with _lock:
-            try:
-                listener_registry[lang].remove(ws_conn)
-                log.info("listen-stream: removed listener for lang=%s", lang)
-            except ValueError:
-                pass
+            session = sessions.get(session_id)
+            if session:
+                try:
+                    session['listener_registry'][lang].remove(ws_conn)
+                    log.info("listen-stream: removed listener for session=%s lang=%s", session_id, lang)
+                except ValueError:
+                    pass
 
 
 if __name__ == "__main__":

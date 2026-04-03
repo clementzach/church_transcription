@@ -1,0 +1,55 @@
+# Haitian Creole profanity word list
+# Only words that are 100% profane in every context.
+# If a word needs context to be an insult, use the full compound phrase instead.
+# Haitian Creole shares roots with French; many terms are loanwords.
+
+# ── Excrement ─────────────────────────────────────────────────────────────────
+kaka
+krot
+# pipi removed — the normal word for urine; used in everyday/medical speech
+# pete removed — also means "to burst/pop" (pete yon boul = burst a balloon)
+
+# ── Genitalia ─────────────────────────────────────────────────────────────────
+bòbòt
+foukan
+# kokoye removed — means "coconut" (dlo kokoye = coconut water)
+# koko removed — also means coconut (short form)
+# zizi removed — common given name/nickname
+# grenn removed — means "grain/seed" (grenn diri = grain of rice, grenn mayi = corn kernel)
+# bòl removed — means "bowl" (household item)
+# bouda removed — used casually in everyday HT speech (like "butt" in English)
+
+# ── Sex acts ──────────────────────────────────────────────────────────────────
+fout
+foute
+fouti
+baise
+# bèzwen — not profane, DO NOT ADD
+
+# ── Slurs ─────────────────────────────────────────────────────────────────────
+bouzen
+salòp
+peten
+reta
+debidanj
+# malpwòp removed — common everyday adjective for dirty/unclean
+# bèt removed — means "animal"; extremely common neutral word in HT
+# enbesil removed — standard word (imbecile)
+
+# ── Mother insults (compounds only — "manman" alone = mother, perfectly fine) ──
+manman chyen
+manman bèt
+manman sal
+# manman ou removed — just means "your mother" (normal phrase)
+
+# ── Dog/pig insults (compounds only) ─────────────────────────────────────────
+chyen sa
+ti chyen
+fout chyen
+kochon sal       # kochon standalone removed — just means "pig" (the animal)
+
+# ── Other compounds ───────────────────────────────────────────────────────────
+vye bèt
+sal bagay
+# derespektan removed — normal adjective meaning "disrespectful"
+# vakabon removed — normal word for vagabond/lowlife

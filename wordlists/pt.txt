@@ -1,0 +1,89 @@
+# Portuguese profanity word list
+# Only words that are 100% profane in every context.
+# If a word needs context to be an insult, use the full compound phrase instead.
+# Covers both Brazilian Portuguese (BR) and European Portuguese (PT).
+
+# ── F-word ────────────────────────────────────────────────────────────────────
+foder
+foda
+foda-se
+fodido
+fodida
+fodidos
+fodidas
+enrabar
+# meter removed — standard Portuguese verb meaning "to put/place"
+
+# ── Shit ──────────────────────────────────────────────────────────────────────
+merda
+merdas
+cagar
+# cagada/cagadas/cagado removed — used as "blunder/mistake" in casual speech
+# bosta removed — means animal manure; used in farming/agricultural contexts
+
+# ── Bitch / whore ─────────────────────────────────────────────────────────────
+puta
+puto
+putas
+putos
+biscate
+biscates
+# rameira removed — appears in Portuguese Bible translations (harlot)
+# vadia/vadias removed — means "stray/vagrant" (used for stray animals)
+
+# ── C-word / genitalia ────────────────────────────────────────────────────────
+cona
+boceta
+buceta
+xochota
+xana
+grelho
+caralho
+# pau removed — means "wood/stick" in everyday Portuguese
+# pinto removed — "chick" (baby bird); common surname
+
+# ── A-word ────────────────────────────────────────────────────────────────────
+cu
+# bumbum removed — mild childish word
+# saco removed — means "bag/sack"
+
+# ── Genitalia / sex ───────────────────────────────────────────────────────────
+cacete
+esporra
+# boquete removed — means "hole/breach" in standard EU Portuguese
+
+# ── Balls ─────────────────────────────────────────────────────────────────────
+colhões
+cabrão
+cabrões
+
+# ── Slurs ─────────────────────────────────────────────────────────────────────
+paneleiro
+arrombado
+arrombada
+# veado removed — is the standard Portuguese word for deer
+# bicha removed — means "worm/insect" in European Portuguese
+# bastardo/bastarda removed — genealogical/historical usage
+# cretino/idiota/imbecil removed — standard vocabulary
+
+# ── Compound insults ──────────────────────────────────────────────────────────
+filho da puta
+filha da puta
+puta que pariu
+puta que te pariu
+vai-te foder
+porra da tua mãe    # tua mãe standalone removed — just means "your mother"
+cu de quem te pariu
+vai tomar no cu
+que se foda
+que merda
+porra de uma égua
+vai à merda
+toma no cu
+foda-se isso
+
+# ── Misc vulgar ───────────────────────────────────────────────────────────────
+# sacanagem removed — means "mischief/naughtiness" in mild BR usage
+# safado/safada removed — means "cheeky/naughty"; not unambiguously profane
+# porco/porca removed — pig/sow (animal words)
+# peidar/peido/soltar um peido removed — bodily function vocabulary; not strong profanity
