@@ -257,6 +257,101 @@
   .line-current { font-size: 32px; font-weight: 500; opacity: 1; }
   .line-prev    { font-size: 20px; opacity: 0.45; }
   .line-older   { font-size: 15px; opacity: 0.20; }
+
+  /* ── Guide button ── */
+  #guide-btn {
+    padding: 3px 10px;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+    background: #f5f5f5;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    color: #555;
+    transition: background 0.15s;
+    margin-left: 8px;
+  }
+  #guide-btn:hover { background: #e8e8e8; }
+
+  /* ── Guide modal ── */
+  #guide-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #guide-overlay.open { display: flex; }
+
+  #guide-modal {
+    background: #fff;
+    border-radius: 12px;
+    padding: 28px 32px;
+    max-width: 500px;
+    width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    position: relative;
+  }
+
+  #guide-modal h2 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 20px;
+  }
+
+  #guide-modal h3 {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #888;
+    margin: 18px 0 8px;
+  }
+
+  #guide-modal ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  #guide-modal li {
+    font-size: 14px;
+    line-height: 1.5;
+    padding-left: 14px;
+    position: relative;
+  }
+
+  #guide-modal li::before {
+    content: '·';
+    position: absolute;
+    left: 2px;
+    color: #aaa;
+  }
+
+  #guide-modal li strong {
+    font-weight: 600;
+  }
+
+  #guide-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #guide-close:hover { background: #f0f0f0; color: #333; }
 </style>
 </head>
 <body>
@@ -305,10 +400,44 @@
       <div id="audio-dot"></div>
       <span id="audio-label">Audio</span>
     </div>
+    <button id="guide-btn" title="How to use">?</button>
   </div>
 
   <div id="caption-panel">
     <div id="panel-lines"></div>
+  </div>
+</div>
+
+<!-- Guide modal -->
+<div id="guide-overlay">
+  <div id="guide-modal">
+    <button id="guide-close" aria-label="Close guide">&#x2715;</button>
+    <h2>How to Use — Listener</h2>
+
+    <h3>Connecting</h3>
+    <ul>
+      <li>Enter the <strong>Session ID</strong> shared by the broadcaster — it's a 6-character code shown on their screen.</li>
+      <li>Select your preferred <strong>language</strong>: Spanish, Haitian Creole, Portuguese, Mandarin, or French.</li>
+      <li>Tap <strong>Connect</strong>. The session must already be live (broadcaster has clicked Start).</li>
+    </ul>
+
+    <h3>Captions</h3>
+    <ul>
+      <li>Translated captions appear as the speaker talks. The most recent line is shown largest; older lines fade and shrink above it.</li>
+      <li>Captions update in real time — there is a small delay of a few seconds while the speech is transcribed and translated.</li>
+    </ul>
+
+    <h3>Audio</h3>
+    <ul>
+      <li>Tap <strong>&#9654; Start Audio</strong> in the header to enable translated text-to-speech audio playback. This button is required by browsers before audio can play.</li>
+      <li>The green dot next to "Audio" pulses while audio is playing.</li>
+      <li>If audio falls behind the live speaker, the oldest queued clip is automatically dropped to keep you in sync.</li>
+    </ul>
+
+    <h3>Session end</h3>
+    <ul>
+      <li>Sessions expire after 2 hours. When the broadcaster ends the session or it expires, you will be disconnected.</li>
+    </ul>
   </div>
 </div>
 
@@ -521,6 +650,13 @@ function setAudioDot(playing) {
     label.textContent = 'Audio';
   }
 }
+
+// ── Guide modal ───────────────────────────────────────────────────────────
+const guideOverlay = document.getElementById('guide-overlay');
+document.getElementById('guide-btn').addEventListener('click', () => guideOverlay.classList.add('open'));
+document.getElementById('guide-close').addEventListener('click', () => guideOverlay.classList.remove('open'));
+guideOverlay.addEventListener('click', (e) => { if (e.target === guideOverlay) guideOverlay.classList.remove('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') guideOverlay.classList.remove('open'); });
 </script>
 </body>
 </html>
