@@ -70,8 +70,44 @@ NT_BOOKS = [
     ("3-jn", 1), ("jude", 1), ("rev", 22),
 ]
 
-# General Conference — October 2025
-GC_COLLECTION_URI = "/general-conference/2025/10"
+# General Conference — October 2025 (talk URIs hardcoded from the session index page)
+GC_TALK_URIS = [
+    "/general-conference/2025/10/11eyring",
+    "/general-conference/2025/10/12stevenson",
+    "/general-conference/2025/10/13browning",
+    "/general-conference/2025/10/14barcellos",
+    "/general-conference/2025/10/15eyre",
+    "/general-conference/2025/10/16uchtdorf",
+    "/general-conference/2025/10/17johnson",
+    "/general-conference/2025/10/19oaks",
+    "/general-conference/2025/10/21rasband",
+    "/general-conference/2025/10/22webb",
+    "/general-conference/2025/10/23jaggi",
+    "/general-conference/2025/10/24brown",
+    "/general-conference/2025/10/25gong",
+    "/general-conference/2025/10/26cziesla",
+    "/general-conference/2025/10/27cook",
+    "/general-conference/2025/10/31kearon",
+    "/general-conference/2025/10/32dennis",
+    "/general-conference/2025/10/33barlow",
+    "/general-conference/2025/10/34jackson",
+    "/general-conference/2025/10/35andersen",
+    "/general-conference/2025/10/41holland",
+    "/general-conference/2025/10/42evanson",
+    "/general-conference/2025/10/43soares",
+    "/general-conference/2025/10/44johnson",
+    "/general-conference/2025/10/45christofferson",
+    "/general-conference/2025/10/46spannaus",
+    "/general-conference/2025/10/47eyring",
+    "/general-conference/2025/10/51bednar",
+    "/general-conference/2025/10/52cuvelier",
+    "/general-conference/2025/10/53holland",
+    "/general-conference/2025/10/54godoy",
+    "/general-conference/2025/10/55renlund",
+    "/general-conference/2025/10/56amos",
+    "/general-conference/2025/10/57farias",
+    "/general-conference/2025/10/58oaks",
+]
 
 # Request settings
 REQUEST_TIMEOUT = 15          # seconds per API call
@@ -101,7 +137,7 @@ def _save_cache(lang: str, uri: str, data):
 
 # ── API fetcher ───────────────────────────────────────────────────────────────
 
-def fetch_content(lang: str, uri: str) -> dict | None:
+def fetch_content(lang: str, uri: str) -> dict :
     """Fetch content from the Church API (or cache).  Returns parsed JSON or None."""
     cached = _load_cache(lang, uri)
     if cached is not None:
@@ -187,26 +223,16 @@ def nt_uris() -> list[str]:
     return uris
 
 
-def gc_uris(lang: str) -> list[str]:
-    """Fetch the GC session index and return talk URIs."""
-    # Try cache first
-    cached = _load_cache(lang, GC_COLLECTION_URI)
-    if cached is None:
-        cached = fetch_content(lang, GC_COLLECTION_URI)
+GC_TEXT_DIR = Path(__file__).parent / "general_conference"
 
-    if not cached or "_error" in cached:
+
+def read_gc_paragraphs(lang: str) -> list[str]:
+    """Read paragraphs from the local general_conference/<lang>.txt file."""
+    path = GC_TEXT_DIR / f"{lang}.txt"
+    if not path.exists():
         return []
-
-    # The index response contains a list of items/talks
-    uris = []
-    raw = json.dumps(cached)
-    # Pattern: URIs like /general-conference/2025/10/some-talk-title
-    found = re.findall(r'"/general-conference/2025/10/[^"]+?"', raw)
-    for match in found:
-        uri = match.strip('"')
-        if uri != GC_COLLECTION_URI and uri not in uris:
-            uris.append(uri)
-    return uris
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [line.strip() for line in lines if line.strip()]
 
 
 # ── Core assertion logic ──────────────────────────────────────────────────────
@@ -332,39 +358,38 @@ class TestScriptureFilter(unittest.TestCase):
 
     # ── General Conference Oct 2025 ─────────────────────────────────────────
 
+    def _run_gc(self, lang: str):
+        paragraphs = read_gc_paragraphs(lang)
+        if not paragraphs:
+            self.skipTest(f"No GC text file found for {lang}")
+        print(f"\n── General Conference Oct 2025 / {lang.upper()} ({len(paragraphs)} lines) ──")
+        fps = check_paragraphs(lang, f"general_conference/{lang}.txt", paragraphs)
+        if fps:
+            print(f"  !! {len(fps)} false positive(s):")
+            for fp in fps:
+                print(f"  {fp}")
+        else:
+            print(f"  OK — 0 false positives")
+        return fps
+
     def test_gc_en(self):
-        uris = gc_uris("en")
-        if not uris:
-            self.skipTest("GC Oct 2025 index unavailable for EN (no network or content not found)")
-        fps = self._run_corpus("General Conference Oct 2025", "en", uris)
+        fps = self._run_gc("en")
         self.assertEqual(fps, [], f"{len(fps)} false positive(s) in GC/EN")
 
     def test_gc_es(self):
-        uris = gc_uris("es")
-        if not uris:
-            self.skipTest("GC Oct 2025 index unavailable for ES")
-        fps = self._run_corpus("General Conference Oct 2025", "es", uris)
+        fps = self._run_gc("es")
         self.assertEqual(fps, [], f"{len(fps)} false positive(s) in GC/ES")
 
     def test_gc_pt(self):
-        uris = gc_uris("pt")
-        if not uris:
-            self.skipTest("GC Oct 2025 index unavailable for PT")
-        fps = self._run_corpus("General Conference Oct 2025", "pt", uris)
+        fps = self._run_gc("pt")
         self.assertEqual(fps, [], f"{len(fps)} false positive(s) in GC/PT")
 
     def test_gc_ht(self):
-        uris = gc_uris("ht")
-        if not uris:
-            self.skipTest("GC Oct 2025 index unavailable for HT")
-        fps = self._run_corpus("General Conference Oct 2025", "ht", uris)
+        fps = self._run_gc("ht")
         self.assertEqual(fps, [], f"{len(fps)} false positive(s) in GC/HT")
 
     def test_gc_zh(self):
-        uris = gc_uris("zh")
-        if not uris:
-            self.skipTest("GC Oct 2025 index unavailable for ZH")
-        fps = self._run_corpus("General Conference Oct 2025", "zh", uris)
+        fps = self._run_gc("zh")
         self.assertEqual(fps, [], f"{len(fps)} false positive(s) in GC/ZH")
 
 
