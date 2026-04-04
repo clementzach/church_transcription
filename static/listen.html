@@ -493,18 +493,16 @@ function playNext() {
   const blob = new Blob([buffer], { type: currentAudioMime });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
-  audio.onended = () => {
+  let done = false;
+  function advance() {
+    if (done) return;
+    done = true;
     URL.revokeObjectURL(url);
     playNext();
-  };
-  audio.onerror = () => {
-    URL.revokeObjectURL(url);
-    playNext();
-  };
-  audio.play().catch(() => {
-    URL.revokeObjectURL(url);
-    playNext();
-  });
+  }
+  audio.onended = advance;
+  audio.onerror = (e) => { console.warn('[audio] playback error', e); advance(); };
+  audio.play().catch((e) => { console.warn('[audio] play() rejected', e); advance(); });
 }
 
 function setAudioDot(playing) {
