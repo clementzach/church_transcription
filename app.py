@@ -45,7 +45,7 @@ if TTS_PROVIDER == 'google':
     from google.genai import types as _google_types
     google_client = _google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh']
+TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']
 
 # ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
 OPENAI_TTS_VOICES = {
@@ -53,12 +53,14 @@ OPENAI_TTS_VOICES = {
     'pt': 'shimmer',
     'ht': 'alloy',
     'zh': 'nova',
+    'fr': 'echo',
 }
 OPENAI_TTS_INSTRUCTIONS = {
     'es': 'Speak naturally and clearly in Spanish.',
     'pt': 'Fale de forma natural e clara em português.',
     'ht': 'Ou pale kreyòl tankou yon natif natal',
     'zh': '请用标准普通话自然流利地朗读，像母语人士一样说话，发音清晰，语调自然。',
+    'fr': 'Parlez de manière naturelle et claire en français.',
 }
 
 # ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
@@ -67,6 +69,7 @@ GOOGLE_TTS_VOICES = {
     'pt': 'Aoede',
     'ht': 'Kore',
     'zh': 'Fenrir',
+    'fr': 'Puck',
 }
 
 # ── Session state ────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@
     --ht: #22c55e;
     --pt: #a855f7;
     --zh: #06b6d4;
+    --fr: #ec4899;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -111,6 +112,7 @@
   .lang-opt[data-lang="ht"] { --c: var(--ht); }
   .lang-opt[data-lang="pt"] { --c: var(--pt); }
   .lang-opt[data-lang="zh"] { --c: var(--zh); }
+  .lang-opt[data-lang="fr"] { --c: var(--fr); }
   .lang-opt.selected {
     background: var(--c);
     color: #fff;
@@ -276,11 +278,14 @@
         <button class="lang-opt" data-lang="ht">HT</button>
         <button class="lang-opt" data-lang="pt">PT</button>
         <button class="lang-opt" data-lang="zh">ZH</button>
+        <button class="lang-opt" data-lang="fr">FR</button>
       </div>
       <div id="lang-names">
         <span class="lang-name">Spanish</span>
         <span class="lang-name">Haitian Creole</span>
         <span class="lang-name">Portuguese</span>
+        <span class="lang-name">Mandarin</span>
+        <span class="lang-name">French</span>
       </div>
     </div>
 
@@ -309,8 +314,8 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7', zh: '#06b6d4' };
-const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh: 'Mandarin' };
+const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7', zh: '#06b6d4', fr: '#ec4899' };
+const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh: 'Mandarin', fr: 'French' };
 
 let selectedLang = null;
 let ws = null;
