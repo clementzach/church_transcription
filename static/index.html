@@ -193,11 +193,12 @@
     border-left: 3px solid var(--accent);
     border-radius: 8px;
     margin: 6px;
-    padding: 14px 18px 14px 16px;
+    padding: 8px 18px 8px 16px;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
     overflow: hidden;
-    position: relative;
   }
   .panel[data-lang="en"] { --accent: var(--en); }
   .panel[data-lang="es"] { --accent: var(--es); }
@@ -210,16 +211,17 @@
     font-weight: 700;
     letter-spacing: 0.06em;
     color: var(--accent);
-    margin-bottom: 10px;
     flex-shrink: 0;
+    width: 24px;
   }
 
   .panel-lines {
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    justify-content: center;
     flex: 1;
-    gap: 6px;
+    min-width: 0;
+    gap: 4px;
     overflow: hidden;
   }
 
