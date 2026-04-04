@@ -20,7 +20,7 @@
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
-    --header-h: 56px;
+    --header-h: 88px;
     --bar-h: 36px;
   }
 
@@ -38,12 +38,61 @@
     top: 0; left: 0; right: 0;
     height: var(--header-h);
     display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 0 20px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--bg);
     z-index: 10;
+  }
+
+  #header-row1, #header-row2 {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  #header-row2 {
+    gap: 8px;
+  }
+
+  #panel-toggle-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: #999;
+    text-transform: uppercase;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  #panel-toggle {
+    display: flex;
+    gap: 6px;
+  }
+
+  .panel-vis-btn {
+    padding: 2px 10px;
+    border-radius: 5px;
+    border: 1.5px solid var(--c);
+    background: var(--c);
+    color: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, opacity 0.15s;
+  }
+  .panel-vis-btn[data-lang="en"] { --c: var(--en); }
+  .panel-vis-btn[data-lang="es"] { --c: var(--es); }
+  .panel-vis-btn[data-lang="ht"] { --c: var(--ht); }
+  .panel-vis-btn[data-lang="pt"] { --c: var(--pt); }
+  .panel-vis-btn[data-lang="zh"] { --c: var(--zh); }
+  .panel-vis-btn.hidden-panel {
+    background: transparent;
+    color: var(--c);
+    opacity: 0.5;
   }
 
   #app-title {
@@ -126,8 +175,8 @@
     bottom: var(--bar-h);
     left: 0; right: 0;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(5, 1fr);
     gap: 0;
   }
 
@@ -275,31 +324,44 @@
 
 <!-- Header -->
 <div id="header">
-  <div id="app-title">Live Captions</div>
+  <div id="header-row1">
+    <div id="app-title">Live Captions</div>
 
-  <div id="lang-section">
-    <span id="lang-label">Toggle spoken language</span>
-    <div id="lang-toggle">
-      <button class="lang-btn active" data-lang="auto">AUTO</button>
-      <button class="lang-btn" data-lang="en">EN</button>
-      <button class="lang-btn" data-lang="es">ES</button>
-      <button class="lang-btn" data-lang="ht">HT</button>
-      <button class="lang-btn" data-lang="pt">PT</button>
-      <button class="lang-btn" data-lang="zh">ZH</button>
+    <div id="lang-section">
+      <span id="lang-label">Toggle spoken language</span>
+      <div id="lang-toggle">
+        <button class="lang-btn active" data-lang="auto">AUTO</button>
+        <button class="lang-btn" data-lang="en">EN</button>
+        <button class="lang-btn" data-lang="es">ES</button>
+        <button class="lang-btn" data-lang="ht">HT</button>
+        <button class="lang-btn" data-lang="pt">PT</button>
+        <button class="lang-btn" data-lang="zh">ZH</button>
+      </div>
+    </div>
+
+    <div id="session-info">
+      <span id="session-id-label">Session</span>
+      <span id="session-id-value">——————</span>
+      <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
+    </div>
+
+    <div id="controls">
+      <button class="ctrl-btn" id="start-btn">Start</button>
+      <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
+      <button class="ctrl-btn" id="fs-btn">⛶</button>
+      <div id="status-dot"></div>
     </div>
   </div>
 
-  <div id="session-info">
-    <span id="session-id-label">Session</span>
-    <span id="session-id-value">——————</span>
-    <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
-  </div>
-
-  <div id="controls">
-    <button class="ctrl-btn" id="start-btn">Start</button>
-    <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
-    <button class="ctrl-btn" id="fs-btn">⛶</button>
-    <div id="status-dot"></div>
+  <div id="header-row2">
+    <span id="panel-toggle-label">Show panels</span>
+    <div id="panel-toggle">
+      <button class="panel-vis-btn" data-lang="en">EN</button>
+      <button class="panel-vis-btn" data-lang="es">ES</button>
+      <button class="panel-vis-btn" data-lang="ht">HT</button>
+      <button class="panel-vis-btn" data-lang="pt">PT</button>
+      <button class="panel-vis-btn" data-lang="zh">ZH</button>
+    </div>
   </div>
 </div>
 
@@ -686,8 +748,36 @@ function handleGladiaMessage(msg) {
 
 }
 
+// ── Panel visibility ──────────────────────────────────────────────────────
+const visiblePanels = new Set(ALL_LANGS);
+
+function updateGridLayout() {
+  const count = visiblePanels.size || 1;
+  document.getElementById('grid').style.gridTemplateRows = `repeat(${count}, 1fr)`;
+  ALL_LANGS.forEach(lang => {
+    const panel = document.querySelector(`.panel[data-lang="${lang}"]`);
+    if (panel) panel.style.display = visiblePanels.has(lang) ? '' : 'none';
+  });
+}
+
+document.querySelectorAll('.panel-vis-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const lang = btn.dataset.lang;
+    if (visiblePanels.has(lang)) {
+      if (visiblePanels.size === 1) return; // keep at least one panel
+      visiblePanels.delete(lang);
+      btn.classList.add('hidden-panel');
+    } else {
+      visiblePanels.add(lang);
+      btn.classList.remove('hidden-panel');
+    }
+    updateGridLayout();
+  });
+});
+
 // ── Init render ───────────────────────────────────────────────────────────
 ALL_LANGS.forEach(renderPanel);
+updateGridLayout();
 </script>
 </body>
 </html>
