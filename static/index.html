@@ -319,6 +319,20 @@
   }
   #listener-link:hover { background: #f5f5f5; }
 
+  #copy-session-btn {
+    font-size: 11px;
+    color: #999;
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  #copy-session-btn:hover { background: #f5f5f5; }
+  #copy-session-btn.copied { color: #22c55e; border-color: #22c55e; }
+
   /* ── Guide modal ── */
   #guide-overlay {
     display: none;
@@ -410,6 +424,7 @@
     <div id="session-info">
       <span id="session-id-label">Session</span>
       <span id="session-id-value">——————</span>
+      <button id="copy-session-btn" disabled title="Copy session ID">Copy</button>
       <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
     </div>
 
@@ -577,6 +592,7 @@ const fsBtn         = document.getElementById('fs-btn');
 const statusDot     = document.getElementById('status-dot');
 const bottomPartial = document.getElementById('bottom-partial');
 const sessionIdEl   = document.getElementById('session-id-value');
+const copySessionBtn = document.getElementById('copy-session-btn');
 
 // ── Language toggle ────────────────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -715,7 +731,7 @@ async function startSession() {
     const data = await resp.json();
     gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
     if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
-    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; }
+    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; }
   } catch (err) {
     alert('Failed to start session: ' + err.message);
     return;
@@ -908,6 +924,23 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
       btn.classList.remove('hidden-panel');
     }
     updateGridLayout();
+  });
+});
+
+// ── Copy session ID ───────────────────────────────────────────────────────
+copySessionBtn.addEventListener('click', () => {
+  if (!currentSessionId) return;
+  navigator.clipboard.writeText(currentSessionId).then(() => {
+    copySessionBtn.textContent = 'Copied!';
+    copySessionBtn.classList.add('copied');
+    setTimeout(() => {
+      copySessionBtn.textContent = 'Copy';
+      copySessionBtn.classList.remove('copied');
+    }, 2000);
+  }).catch(() => {
+    // Fallback for browsers that block clipboard without HTTPS
+    sessionIdEl.focus();
+    window.getSelection()?.selectAllChildren(sessionIdEl);
   });
 });
 

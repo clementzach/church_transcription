@@ -44,7 +44,24 @@
   #login-title {
     font-size: 22px;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
+
+  #login-guide-btn {
+    padding: 2px 9px;
+    border-radius: 6px;
+    border: 1.5px solid #ddd;
+    background: none;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    color: #888;
+    transition: background 0.15s, color 0.15s;
+  }
+  #login-guide-btn:hover { background: #f0f0f0; color: #333; }
 
   #login-form {
     display: flex;
@@ -358,7 +375,10 @@
 
 <!-- Login screen -->
 <div id="login-screen">
-  <div id="login-title">Live Translation</div>
+  <div id="login-title">
+    Live Translation
+    <button id="login-guide-btn" title="How to use">?</button>
+  </div>
 
   <div id="login-form">
     <div style="width:100%">
@@ -654,6 +674,7 @@ function setAudioDot(playing) {
 // ── Guide modal ───────────────────────────────────────────────────────────
 const guideOverlay = document.getElementById('guide-overlay');
 document.getElementById('guide-btn').addEventListener('click', () => guideOverlay.classList.add('open'));
+document.getElementById('login-guide-btn').addEventListener('click', () => guideOverlay.classList.add('open'));
 document.getElementById('guide-close').addEventListener('click', () => guideOverlay.classList.remove('open'));
 guideOverlay.addEventListener('click', (e) => { if (e.target === guideOverlay) guideOverlay.classList.remove('open'); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') guideOverlay.classList.remove('open'); });
