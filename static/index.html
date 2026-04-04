@@ -17,6 +17,7 @@
     --ht: #22c55e;
     --pt: #a855f7;
     --zh: #06b6d4;
+    --fr: #ec4899;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -99,6 +100,7 @@
   .panel-vis-btn[data-lang="ht"] { --c: var(--ht); }
   .panel-vis-btn[data-lang="pt"] { --c: var(--pt); }
   .panel-vis-btn[data-lang="zh"] { --c: var(--zh); }
+  .panel-vis-btn[data-lang="fr"] { --c: var(--fr); }
   .panel-vis-btn.hidden-panel {
     background: transparent;
     color: var(--c);
@@ -135,6 +137,7 @@
   .lang-btn[data-lang="ht"] { --c: var(--ht); }
   .lang-btn[data-lang="pt"] { --c: var(--pt); }
   .lang-btn[data-lang="zh"] { --c: var(--zh); }
+  .lang-btn[data-lang="fr"] { --c: var(--fr); }
   .lang-btn.active {
     background: var(--c);
     color: #fff;
@@ -205,6 +208,7 @@
   .panel[data-lang="ht"] { --accent: var(--ht); }
   .panel[data-lang="pt"] { --accent: var(--pt); }
   .panel[data-lang="zh"] { --accent: var(--zh); }
+  .panel[data-lang="fr"] { --accent: var(--fr); }
 
   .panel-tag {
     font-size: 11px;
@@ -347,6 +351,7 @@
         <button class="lang-btn" data-lang="ht">HT</button>
         <button class="lang-btn" data-lang="pt">PT</button>
         <button class="lang-btn" data-lang="zh">ZH</button>
+        <button class="lang-btn" data-lang="fr">FR</button>
       </div>
     </div>
     <div class="toggle-row">
@@ -357,6 +362,7 @@
         <button class="panel-vis-btn" data-lang="ht">HT</button>
         <button class="panel-vis-btn" data-lang="pt">PT</button>
         <button class="panel-vis-btn" data-lang="zh">ZH</button>
+        <button class="panel-vis-btn" data-lang="fr">FR</button>
       </div>
     </div>
   </div>
@@ -384,6 +390,10 @@
     <div class="panel-tag">ZH</div>
     <div class="panel-lines" id="lines-zh"></div>
   </div>
+  <div class="panel" data-lang="fr">
+    <div class="panel-tag">FR</div>
+    <div class="panel-lines" id="lines-fr"></div>
+  </div>
 </div>
 
 <!-- Bottom bar -->
@@ -395,8 +405,8 @@
 
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
-const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh'];
-const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh']; // non-English target languages
+const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr'];
+const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']; // non-English target languages
 const GLADIA_CONFIG_BASE = {
   encoding: 'wav/pcm',
   sample_rate: 16000,
@@ -428,9 +438,9 @@ let isRunning = false;
 let reconnectTimer = null;
 
 // Per-panel history: array of up to 3 committed lines
-const history = { en: [], es: [], ht: [], pt: [], zh: [] };
+const history = { en: [], es: [], ht: [], pt: [], zh: [], fr: [] };
 // Current partial text per panel (only source panel uses it)
-const partials = { en: '', es: '', ht: '', pt: '', zh: '' };
+const partials = { en: '', es: '', ht: '', pt: '', zh: '', fr: '' };
 
 // ── UI refs ────────────────────────────────────────────────────────────────
 const startBtn      = document.getElementById('start-btn');
