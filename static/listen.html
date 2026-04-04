@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSe2keI3J3rs/B+tBkpFqk4s0NubBT5FLBA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -275,7 +276,8 @@
   .line-prev    { font-size: 20px; opacity: 0.45; }
   .line-older   { font-size: 15px; opacity: 0.20; }
 
-  /* ── Guide button ── */
+  /* ── QR / Guide header buttons ── */
+  #qr-btn,
   #guide-btn {
     padding: 3px 10px;
     border-radius: 6px;
@@ -289,7 +291,70 @@
     transition: background 0.15s;
     margin-left: 8px;
   }
+  #qr-btn:hover,
   #guide-btn:hover { background: #e8e8e8; }
+
+  /* ── QR modal ── */
+  #qr-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #qr-overlay.open { display: flex; }
+
+  #qr-modal {
+    background: #fff;
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 300px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  #qr-modal h2 {
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  #qr-code-box {
+    width: 220px;
+    height: 220px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #qr-url-text {
+    font-size: 11px;
+    color: #aaa;
+    text-align: center;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  #qr-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #qr-close:hover { background: #f0f0f0; color: #333; }
 
   /* ── Guide modal ── */
   #guide-overlay {
@@ -420,11 +485,22 @@
       <div id="audio-dot"></div>
       <span id="audio-label">Audio</span>
     </div>
+    <button id="qr-btn" title="Show QR code to share this session">QR</button>
     <button id="guide-btn" title="How to use">?</button>
   </div>
 
   <div id="caption-panel">
     <div id="panel-lines"></div>
+  </div>
+</div>
+
+<!-- QR modal -->
+<div id="qr-overlay">
+  <div id="qr-modal">
+    <button id="qr-close" aria-label="Close QR code">&#x2715;</button>
+    <h2>Scan to Join</h2>
+    <div id="qr-code-box"></div>
+    <p id="qr-url-text"></p>
   </div>
 </div>
 
@@ -486,6 +562,13 @@ sessionInput.addEventListener('input', () => {
   sessionInput.value = sessionInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
   updateConnectBtn();
 });
+
+// Pre-fill session ID from URL query param (e.g. ?session=XXXXXX from a QR scan)
+const _prefilledSession = new URLSearchParams(window.location.search).get('session');
+if (_prefilledSession) {
+  sessionInput.value = _prefilledSession.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+  updateConnectBtn();
+}
 
 langButtons.forEach(btn => {
   btn.addEventListener('click', () => {
@@ -670,6 +753,33 @@ function setAudioDot(playing) {
     label.textContent = 'Audio';
   }
 }
+
+// ── QR code modal ─────────────────────────────────────────────────────────
+const qrOverlay = document.getElementById('qr-overlay');
+
+document.getElementById('qr-btn').addEventListener('click', () => {
+  const sessionId = sessionInput.value || document.getElementById('listen-session-tag').textContent;
+  if (!sessionId || sessionId.length !== 6) return;
+  // Build URL from current page location — never hardcoded
+  const qrUrl = window.location.origin + window.location.pathname + '?session=' + sessionId;
+
+  const box = document.getElementById('qr-code-box');
+  box.innerHTML = '';
+  new QRCode(box, {
+    text: qrUrl,
+    width: 220,
+    height: 220,
+    colorDark: '#111111',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+  document.getElementById('qr-url-text').textContent = qrUrl;
+  qrOverlay.classList.add('open');
+});
+
+document.getElementById('qr-close').addEventListener('click', () => qrOverlay.classList.remove('open'));
+qrOverlay.addEventListener('click', (e) => { if (e.target === qrOverlay) qrOverlay.classList.remove('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { qrOverlay.classList.remove('open'); } });
 
 // ── Guide modal ───────────────────────────────────────────────────────────
 const guideOverlay = document.getElementById('guide-overlay');

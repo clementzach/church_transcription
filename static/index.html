@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSe2keI3J3rs/B+tBkpFqk4s0NubBT5FLBA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -412,6 +413,68 @@
   }
   #guide-close:hover { background: #f0f0f0; color: #333; }
   #guide-modal a { color: #3b82f6; }
+
+  /* ── QR modal ── */
+  #qr-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #qr-overlay.open { display: flex; }
+
+  #qr-modal {
+    background: var(--bg);
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 320px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  #qr-modal h2 {
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  #qr-code-box {
+    width: 240px;
+    height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #qr-url-text {
+    font-size: 11px;
+    color: #aaa;
+    text-align: center;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  #qr-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #qr-close:hover { background: #f0f0f0; color: #333; }
 </style>
 </head>
 <body>
@@ -432,6 +495,7 @@
       <button class="ctrl-btn" id="start-btn">Start</button>
       <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
       <button class="ctrl-btn" id="fs-btn">⛶</button>
+      <button class="ctrl-btn" id="qr-btn" disabled title="Show QR code for listeners">QR</button>
       <button class="ctrl-btn" id="guide-btn" title="How to use">?</button>
       <div id="status-dot"></div>
     </div>
@@ -489,6 +553,16 @@
   <div class="panel" data-lang="fr">
     <div class="panel-tag">FR</div>
     <div class="panel-lines" id="lines-fr"></div>
+  </div>
+</div>
+
+<!-- QR modal -->
+<div id="qr-overlay">
+  <div id="qr-modal">
+    <button id="qr-close" aria-label="Close QR code">&#x2715;</button>
+    <h2>Scan to Join</h2>
+    <div id="qr-code-box"></div>
+    <p id="qr-url-text"></p>
   </div>
 </div>
 
@@ -593,6 +667,7 @@ const statusDot     = document.getElementById('status-dot');
 const bottomPartial = document.getElementById('bottom-partial');
 const sessionIdEl   = document.getElementById('session-id-value');
 const copySessionBtn = document.getElementById('copy-session-btn');
+const qrBtn          = document.getElementById('qr-btn');
 
 // ── Language toggle ────────────────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -731,7 +806,7 @@ async function startSession() {
     const data = await resp.json();
     gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
     if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
-    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; }
+    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; qrBtn.disabled = false; }
   } catch (err) {
     alert('Failed to start session: ' + err.message);
     return;
@@ -926,6 +1001,34 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
     updateGridLayout();
   });
 });
+
+// ── QR code modal ─────────────────────────────────────────────────────────
+const qrOverlay = document.getElementById('qr-overlay');
+let qrInstance = null;
+
+qrBtn.addEventListener('click', () => {
+  if (!currentSessionId) return;
+  // Derive listener URL from the existing Listener link — never hardcoded
+  const listenerHref = document.getElementById('listener-link').href;
+  const qrUrl = listenerHref + '?session=' + currentSessionId;
+
+  const box = document.getElementById('qr-code-box');
+  box.innerHTML = '';
+  qrInstance = new QRCode(box, {
+    text: qrUrl,
+    width: 240,
+    height: 240,
+    colorDark: '#111111',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+  document.getElementById('qr-url-text').textContent = qrUrl;
+  qrOverlay.classList.add('open');
+});
+
+document.getElementById('qr-close').addEventListener('click', () => qrOverlay.classList.remove('open'));
+qrOverlay.addEventListener('click', (e) => { if (e.target === qrOverlay) qrOverlay.classList.remove('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { qrOverlay.classList.remove('open'); } });
 
 // ── Copy session ID ───────────────────────────────────────────────────────
 copySessionBtn.addEventListener('click', () => {
