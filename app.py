@@ -131,7 +131,7 @@ def _tts_generate_audio(lang, text):
 
     # Google Gemini 2.5 Flash TTS
     response = google_client.models.generate_content(
-        model='gemini-2.5-flash-tts',
+        model='gemini-2.5-flash-preview-tts',
         contents=text,
         config=_google_types.GenerateContentConfig(
             response_modalities=['AUDIO'],
@@ -142,7 +142,7 @@ def _tts_generate_audio(lang, text):
                     )
                 ),
             ),
-            system_instruction=GOOGLE_TTS_INSTRUCTIONS[lang],
+            #system_instruction=GOOGLE_TTS_INSTRUCTIONS[lang],
         ),
     )
     pcm_data = response.candidates[0].content.parts[0].inline_data.data
