@@ -68,27 +68,6 @@ GOOGLE_TTS_VOICES = {
     'ht': 'Kore',
     'zh': 'Fenrir',
 }
-GOOGLE_TTS_INSTRUCTIONS = {
-    'es': (
-        'You are a native Spanish speaker from Latin America. '
-        'Speak naturally and fluently with authentic Latin American Spanish '
-        'pronunciation, rhythm, and intonation. Sound warm, clear, and conversational.'
-    ),
-    'pt': (
-        'Você é um falante nativo de português brasileiro. '
-        'Fale de forma natural e fluente com pronúncia, ritmo e entonação '
-        'autênticos do português brasileiro. Soe caloroso, claro e conversacional.'
-    ),
-    'ht': (
-        'Ou se yon moun ki pale kreyòl ayisyen kòm lang manman ou. '
-        'Pale natirèlman ak aksan, ritem ak entònasyon otantik kreyòl ayisyen. '
-        'Sone cho, klè epi konvèsasyonèl.'
-    ),
-    'zh': (
-        '你是一位普通话母语者。请用自然流利的标准普通话朗读，'
-        '发音标准，语调自然，声音温暖清晰，像日常对话一样亲切。'
-    ),
-}
 
 # ── Session state ────────────────────────────────────────────────────────────
 # sessions[session_id] = {
@@ -142,7 +121,6 @@ def _tts_generate_audio(lang, text):
                     )
                 ),
             ),
-            system_instruction=GOOGLE_TTS_INSTRUCTIONS[lang],
         ),
     )
     pcm_data = response.candidates[0].content.parts[0].inline_data.data
