@@ -5,4 +5,5 @@ requests
 websocket-client
 gunicorn
 gevent
-google-cloud-texttospeech>=2.29.0
+openai
+google-genai
