@@ -14,7 +14,7 @@ from flask_sock import Sock
 from dotenv import load_dotenv
 import websocket
 from google.cloud import texttospeech as _texttospeech
-from google.api_core import client_options as _client_options
+import google.auth.api_key as _google_api_key
 from filter import filter_text as _filter_text
 
 load_dotenv()
@@ -32,10 +32,11 @@ sock = Sock(app)
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 
 # ── Google Cloud TTS client (singleton, shared across all sessions) ─────────
+# Explicit ApiKeyCredentials bypasses google.auth.default() credential
+# discovery, which otherwise hangs ~30s on non-GCE machines trying to reach
+# the GCE metadata server.
 _tts_client = _texttospeech.TextToSpeechClient(
-    client_options=_client_options.ClientOptions(
-        api_key=os.getenv("GOOGLE_API_KEY")
-    )
+    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_API_KEY"))
 )
 
 TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
