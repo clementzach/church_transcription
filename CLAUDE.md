@@ -25,10 +25,10 @@ Browser (broadcaster)
 
 | File | Purpose |
 |------|---------|
-| `app.py` | Flask backend — session management, WebSocket relay, TTS workers |
+| `app.py` | FastAPI backend — session management, WebSocket relay, TTS workers |
 | `static/index.html` | Broadcaster UI — mic capture, live caption grid (6 languages), how-to guide modal |
 | `static/listen.html` | Listener UI — session login, caption display, audio playback, how-to guide modal |
-| `church-transcription.service` | Systemd unit for production (gunicorn + gevent, single worker) |
+| `church-transcription.service` | Systemd unit for production (uvicorn, single process) |
 
 ## Running locally
 
@@ -53,8 +53,11 @@ Browsers block autoplay without a prior user gesture. `listen.html` gates all pl
 
 Each language has a `queue.Queue(maxsize=1)`. If a new translation arrives while one is already queued, the stale item is dropped and replaced. This keeps listeners in sync with the live speaker rather than falling further behind.
 
+## Listener delivery (asyncio queues)
+
+Each listener WebSocket handler holds an `asyncio.Queue`. TTS worker threads push audio/text into it via `loop.call_soon_threadsafe(q.put_nowait, item)`. The handler awaits items and forwards them; a `None` sentinel signals close (session expiry). This avoids any direct WebSocket calls from threads.
+
 ## Deployment notes
 
-- Single gunicorn worker (`-w 1`) required — session state lives in-process.
-- gevent monkey-patching at the top of `app.py` is mandatory before any other imports.
+- Single uvicorn process required — session state lives in-process.
 - Reverse proxy (nginx) should forward `/church_transcription/` prefix and upgrade WebSocket headers.
