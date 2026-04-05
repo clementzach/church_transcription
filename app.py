@@ -1,6 +1,9 @@
 from gevent import monkey
 monkey.patch_all()
 
+import grpc.experimental.gevent as _grpc_gevent
+_grpc_gevent.init_gevent()
+
 import io
 import os
 import json
