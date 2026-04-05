@@ -16,8 +16,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_sock import Sock
 from dotenv import load_dotenv
 import websocket
-from google.cloud import texttospeech as _texttospeech
-from google.api_core import client_options as _client_options
+from openai import OpenAI
 from filter import filter_text as _filter_text
 
 load_dotenv()
@@ -34,41 +33,49 @@ sock = Sock(app)
 
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 
-# ── Google Cloud TTS client (singleton, shared across all sessions) ─────────
-_tts_client = _texttospeech.TextToSpeechClient(
-    client_options=_client_options.ClientOptions(
-        api_key=os.getenv("GOOGLE_API_KEY")
-    )
-)
+# ── TTS Provider ───────────────────────────────────────────────────────────
+# Set TTS_PROVIDER=openai in .env to switch back to OpenAI TTS.
+# Default is 'google' (Gemini 2.5 Flash TTS).
+TTS_PROVIDER = os.getenv('TTS_PROVIDER', 'google').lower()
+
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+if TTS_PROVIDER == 'google':
+    from google import genai as _google_genai
+    from google.genai import types as _google_types
+    google_client = _google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
 
-# ── Google Cloud TTS config (Gemini 2.5 Flash, streaming) ──────────────────
-GOOGLE_TTS_MODEL = 'gemini-2.5-flash-tts'
+# ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
+OPENAI_TTS_VOICES = {
+    'es': 'nova',
+    'pt': 'shimmer',
+    'ht': 'alloy',
+    'zh': 'nova',
+    'fr': 'echo',
+    'no': 'alloy',
+}
+OPENAI_TTS_INSTRUCTIONS = {
+    'es': 'Speak naturally and clearly in Spanish.',
+    'pt': 'Fale de forma natural e clara em português.',
+    'ht': 'Ou pale kreyòl tankou yon natif natal',
+    'zh': '请用标准普通话自然流利地朗读，像母语人士一样说话，发音清晰，语调自然。',
+    'fr': 'Parlez de manière naturelle et claire en français.',
+    'no': 'Snakk naturlig og tydelig på norsk.',
+}
+
+# ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
 GOOGLE_TTS_VOICES = {
-    'es': 'charon',
-    'pt': 'aoede',
-    'ht': 'kore',
-    'zh': 'fenrir',
-    'fr': 'puck',
+    'es': 'Charon',
+    'pt': 'Aoede',
+    'ht': 'Kore',
+    'zh': 'Fenrir',
+    'fr': 'Puck',
     'no': 'Charon',
 }
-GOOGLE_TTS_LOCALES = {
-    'es': 'es-US',
-    'pt': 'pt-BR',
-    'ht': 'fr-HT',
-    'zh': 'cmn-CN',
-    'fr': 'fr-FR',
-    'no': 'nb-NO',
-}
 
-# After this many seconds with no new text, close the stream and reopen on demand.
-TTS_INACTIVITY_TIMEOUT = 30.0
-# Silence gap (seconds) between audio chunks that signals an utterance boundary.
-TTS_UTTERANCE_GAP = 0.2
-
-
-# ── Session state ─────────────────────────────────────────────────────────────
+# ── Session state ────────────────────────────────────────────────────────────
 # sessions[session_id] = {
 #   'start_time': float,
 #   'listener_registry': {lang: [ws, ...]},
@@ -91,34 +98,39 @@ def _pcm_to_wav(pcm_data, sample_rate=24000, channels=1, sample_width=2):
     return buf.getvalue()
 
 
-def _broadcast(session_id, lang, message):
-    """Send a JSON str or audio bytes to every current listener for (session, lang).
+def _tts_generate_audio(lang, text):
+    """Generate TTS audio using the configured provider.
 
-    Dead connections are pruned from the registry.
+    Returns (audio_bytes, mime_type). Switch providers by setting
+    TTS_PROVIDER=openai or TTS_PROVIDER=google in .env.
     """
-    with _lock:
-        session = sessions.get(session_id)
-        if not session:
-            return
-        listeners = list(session['listener_registry'].get(lang, []))
+    if TTS_PROVIDER == 'openai':
+        response = openai_client.audio.speech.create(
+            model='gpt-4o-mini-tts',
+            voice=OPENAI_TTS_VOICES[lang],
+            input=text,
+            instructions=OPENAI_TTS_INSTRUCTIONS[lang],
+            response_format='mp3',
+        )
+        return response.content, 'audio/mpeg'
 
-    dead = []
-    for ws_conn in listeners:
-        try:
-            ws_conn.send(message)
-        except Exception:
-            dead.append(ws_conn)
-
-    if dead:
-        with _lock:
-            session = sessions.get(session_id)
-            if session:
-                reg = session['listener_registry'].get(lang, [])
-                for d in dead:
-                    try:
-                        reg.remove(d)
-                    except ValueError:
-                        pass
+    # Google Gemini 2.5 Flash TTS
+    response = google_client.models.generate_content(
+        model='gemini-2.5-flash-preview-tts',
+        contents=text,
+        config=_google_types.GenerateContentConfig(
+            response_modalities=['AUDIO'],
+            speech_config=_google_types.SpeechConfig(
+                voice_config=_google_types.VoiceConfig(
+                    prebuilt_voice_config=_google_types.PrebuiltVoiceConfig(
+                        voice_name=GOOGLE_TTS_VOICES[lang],
+                    )
+                ),
+            ),
+        ),
+    )
+    pcm_data = response.candidates[0].content.parts[0].inline_data.data
+    return _pcm_to_wav(pcm_data), 'audio/wav'
 
 
 def _generate_session_id():
@@ -133,7 +145,7 @@ def _expire_session(session_id):
         session = sessions.pop(session_id, None)
     if session is None:
         return
-    # Send None sentinel to each TTS worker so they shut down cleanly.
+    # Stop this session's TTS workers
     for lang in TRANSLATION_LANGS:
         q = session['tts_queues'][lang]
         try:
@@ -147,7 +159,7 @@ def _expire_session(session_id):
                 q.put_nowait(None)
             except queue.Full:
                 pass
-    # Notify and close listener WebSockets.
+    # Notify and close listener WebSockets
     for lang in TRANSLATION_LANGS:
         for ws_conn in list(session['listener_registry'].get(lang, [])):
             try:
@@ -169,7 +181,7 @@ def _enqueue_tts(session_id, lang, text):
     try:
         q.put_nowait(text)
     except queue.Full:
-        # Drop the stale pending item and replace with the latest.
+        # Drop the stale pending item and replace with the latest
         try:
             q.get_nowait()
         except queue.Empty:
@@ -181,135 +193,87 @@ def _enqueue_tts(session_id, lang, text):
 
 
 def _tts_worker(session_id, lang):
-    """Maintains one long-lived Google Cloud TTS streaming connection per (session, lang).
-
-    Architecture
-    ────────────
-    Each iteration of the outer while loop owns one gRPC streaming call:
-
-      request_gen (gRPC background thread)
-        • Reads text items from tts_queues[lang] (maxsize=1, drops stale utterances).
-        • Broadcasts the caption to listeners before yielding to TTS so text appears
-          immediately while audio is still being synthesised.
-        • Returns (closing the stream) after TTS_INACTIVITY_TIMEOUT seconds of silence
-          or when the None shutdown sentinel is received.
-
-      response_reader (daemon thread)
-        • Iterates the streaming responses and puts each PCM chunk into audio_q.
-        • Puts a None sentinel when the stream ends (normally or on error).
-
-      _tts_worker greenlet (main loop)
-        • Reads audio_q with a TTS_UTTERANCE_GAP timeout.
-        • A timeout means no audio arrived for that long → utterance boundary.
-          Accumulated PCM chunks are wrapped in a single WAV and broadcast.
-        • A None sentinel means the stream ended; flushes any remaining audio,
-          then loops back to open a new stream (or exits if shutdown is set).
-
-    The gRPC channel is reused across calls because _tts_client is a singleton.
-    """
-    log.info("TTS worker started: session=%s lang=%s", session_id, lang)
-
+    """Background thread per (session, language): calls TTS provider and broadcasts to listeners."""
+    log.info("TTS worker started for session=%s lang=%s provider=%s", session_id, lang, TTS_PROVIDER)
+    # Hold a reference to this session's queue so we can block on it even after
+    # the session is removed from the dict (expiry will enqueue None to unblock us).
     with _lock:
         session = sessions.get(session_id)
         if not session:
             return
-        tts_q = session['tts_queues'][lang]
+        q = session['tts_queues'][lang]
 
-    config_req = _texttospeech.StreamingSynthesizeRequest(
-        streaming_config=_texttospeech.StreamingSynthesizeConfig(
-            voice=_texttospeech.VoiceSelectionParams(
-                name=GOOGLE_TTS_VOICES[lang],
-                language_code=GOOGLE_TTS_LOCALES[lang],
-                model_name=GOOGLE_TTS_MODEL,
-            )
-        )
-    )
+    while True:
+        text = q.get()
+        if text is None:
+            break
 
-    shutdown = threading.Event()
+        log.info("[tts:%s:%s] Sending text to listeners: %.60s", session_id, lang, text)
 
-    while not shutdown.is_set():
-        # Per-stream-attempt state.  Default-argument binding (e.g. _alive=call_alive)
-        # ensures each closure captures *this* iteration's objects, not a later one.
-        call_alive = threading.Event()
-        call_alive.set()
-        audio_q = queue.Queue()
-
-        def request_gen(_alive=call_alive):
-            """Yields TTS requests; runs in gRPC's background thread."""
-            yield config_req
-            inactive_since = None
-            while _alive.is_set():
-                try:
-                    text = tts_q.get(timeout=0.2)
-                    inactive_since = None
-                except queue.Empty:
-                    if inactive_since is None:
-                        inactive_since = time.time()
-                    elif time.time() - inactive_since >= TTS_INACTIVITY_TIMEOUT:
-                        log.info("[tts:%s:%s] Inactivity timeout — closing stream", session_id, lang)
-                        _alive.clear()
-                        return
-                    continue
-                if text is None:
-                    shutdown.set()
-                    _alive.clear()
-                    return
-                # Broadcast caption before audio so text appears immediately.
-                _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
-                log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
-                yield _texttospeech.StreamingSynthesizeRequest(
-                    input=_texttospeech.StreamingSynthesisInput(text=text)
-                )
-
-        def response_reader(_rg=request_gen, _aq=audio_q):
-            """Iterates the TTS stream; runs in its own daemon thread."""
+        # Send text so the listener can display it immediately
+        with _lock:
+            session = sessions.get(session_id)
+            if not session:
+                break
+            listeners = list(session['listener_registry'].get(lang, []))
+        dead = []
+        for ws_conn in listeners:
             try:
-                for response in _tts_client.streaming_synthesize(_rg()):
-                    if response.audio_content:
-                        _aq.put(response.audio_content)
-            except Exception as e:
-                if not shutdown.is_set():
-                    log.error("[tts:%s:%s] Stream error: %s", session_id, lang, e)
-            finally:
-                _aq.put(None)  # always signal end-of-stream
+                ws_conn.send(json.dumps({'type': 'text', 'text': text}))
+            except Exception:
+                dead.append(ws_conn)
+        if dead:
+            with _lock:
+                session = sessions.get(session_id)
+                if session:
+                    for d in dead:
+                        try:
+                            session['listener_registry'][lang].remove(d)
+                        except ValueError:
+                            pass
 
-        reader_thread = threading.Thread(target=response_reader, daemon=True)
-        reader_thread.start()
+        # Skip API call if all listeners disconnected while text was queued
+        with _lock:
+            session = sessions.get(session_id)
+            if not session or not session['listener_registry'].get(lang):
+                log.info("[tts:%s:%s] No listeners, skipping TTS API call", session_id, lang)
+                continue
 
-        # Accumulate PCM chunks and flush as one WAV per utterance.
-        # A TTS_UTTERANCE_GAP timeout on the queue means no audio arrived for
-        # that long — the synthesiser is idle between utterances — so we flush.
-        current_chunks = []
+        # Generate audio via the configured provider
         try:
-            while True:
-                try:
-                    chunk = audio_q.get(timeout=TTS_UTTERANCE_GAP)
-                except queue.Empty:
-                    # Utterance boundary: flush accumulated audio.
-                    if current_chunks:
-                        log.info("[tts:%s:%s] Flushing %d PCM chunks as WAV",
-                                 session_id, lang, len(current_chunks))
-                        _broadcast(session_id, lang, _pcm_to_wav(b''.join(current_chunks)))
-                        current_chunks = []
-                    continue
-                if chunk is None:
-                    break  # stream ended
-                current_chunks.append(chunk)
-        finally:
-            # Flush any tail audio that arrived before the None sentinel.
-            if current_chunks:
-                _broadcast(session_id, lang, _pcm_to_wav(b''.join(current_chunks)))
-            call_alive.clear()
+            log.info("[tts:%s:%s] Calling %s TTS", session_id, lang, TTS_PROVIDER)
+            audio_bytes, mime_type = _tts_generate_audio(lang, text)
+            log.info("[tts:%s:%s] Got %d bytes of audio (%s)", session_id, lang, len(audio_bytes), mime_type)
+        except Exception as e:
+            log.error("[tts:%s:%s] TTS error: %s", session_id, lang, e)
+            continue
 
-        reader_thread.join(timeout=2.0)
+        with _lock:
+            session = sessions.get(session_id)
+            if not session:
+                continue
+            listeners = list(session['listener_registry'].get(lang, []))
+        dead = []
+        for ws_conn in listeners:
+            try:
+                ws_conn.send(json.dumps({'type': 'audio_info', 'mime_type': mime_type}))
+                ws_conn.send(audio_bytes)
+            except Exception:
+                dead.append(ws_conn)
+        if dead:
+            with _lock:
+                session = sessions.get(session_id)
+                if session:
+                    for d in dead:
+                        try:
+                            session['listener_registry'][lang].remove(d)
+                        except ValueError:
+                            pass
 
-        if not shutdown.is_set():
-            time.sleep(0.2)  # brief pause before reconnecting
-
-    log.info("TTS worker stopped: session=%s lang=%s", session_id, lang)
+    log.info("TTS worker stopped for session=%s lang=%s", session_id, lang)
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Routes ─────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -346,13 +310,13 @@ def init_session():
         with _lock:
             sessions[session_id] = session
 
-        # Start one TTS worker per language for this session.
+        # Start TTS workers for this session
         for lang in TRANSLATION_LANGS:
             threading.Thread(
                 target=_tts_worker, args=(session_id, lang), daemon=True
             ).start()
 
-        # Schedule automatic expiry.
+        # Schedule automatic expiry tied to this session
         timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
         timer.daemon = True
         timer.start()
@@ -369,7 +333,7 @@ def init_session():
 
 @sock.route("/stream")
 def stream(browser_ws):
-    # First message from browser: JSON with Gladia URL and session_id.
+    # First message from browser: JSON with Gladia URL and session_id
     raw_first = browser_ws.receive()
     gladia_url = None
     session_id = None
@@ -378,7 +342,7 @@ def stream(browser_ws):
         gladia_url = first_msg.get('url', '')
         session_id = first_msg.get('session_id', '')
     except Exception:
-        # Legacy fallback: plain URL string (no session routing).
+        # Legacy fallback: plain URL string (no session routing)
         gladia_url = raw_first
         session_id = None
 
@@ -465,7 +429,7 @@ def stream(browser_ws):
                     if translated.get('text'):
                         translated['text'] = _filter_text(translated['text'])
                         to_send = json.dumps(msg)
-                    # Enqueue filtered text for TTS/listener delivery.
+                    # Enqueue filtered text for TTS/listener delivery
                     lang = (data.get('target_language') or '').lower()
                     text = translated.get('text', '')
                     if lang in TRANSLATION_LANGS and text:
@@ -490,7 +454,7 @@ def stream(browser_ws):
 
 @sock.route("/listen-stream")
 def listen_stream(ws_conn):
-    # First message: JSON with session_id and language.
+    # First message: JSON with session_id and language
     try:
         first = ws_conn.receive()
         msg = json.loads(first)
@@ -514,7 +478,7 @@ def listen_stream(ws_conn):
         log.info("listen-stream: registered listener for session=%s lang=%s (total=%d)",
                  session_id, lang, len(session['listener_registry'][lang]))
 
-    # Hold connection open; remove on disconnect.
+    # Hold connection open; remove on disconnect
     try:
         while True:
             data = ws_conn.receive()
