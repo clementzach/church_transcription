@@ -41,9 +41,13 @@ TTS_PROVIDER = os.getenv('TTS_PROVIDER', 'google').lower()
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 if TTS_PROVIDER == 'google':
-    from google import genai as _google_genai
-    from google.genai import types as _google_types
-    google_client = _google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    from google.cloud import texttospeech as _texttospeech
+    from google.api_core import client_options as _client_options
+    _tts_client = _texttospeech.TextToSpeechClient(
+        client_options=_client_options.ClientOptions(
+            api_key=os.getenv("GOOGLE_API_KEY")
+        )
+    )
 
 TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']
 
@@ -63,13 +67,21 @@ OPENAI_TTS_INSTRUCTIONS = {
     'fr': 'Parlez de manière naturelle et claire en français.',
 }
 
-# ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
+# ── Google Cloud TTS config (Gemini 2.5 Flash TTS, streaming) ─────────────
+GOOGLE_TTS_MODEL = 'gemini-2.5-flash-tts'
 GOOGLE_TTS_VOICES = {
-    'es': 'Charon',
-    'pt': 'Aoede',
-    'ht': 'Kore',
-    'zh': 'Fenrir',
-    'fr': 'Puck',
+    'es': 'charon',
+    'pt': 'aoede',
+    'ht': 'kore',
+    'zh': 'fenrir',
+    'fr': 'puck',
+}
+GOOGLE_TTS_LOCALES = {
+    'es': 'es-US',
+    'pt': 'pt-BR',
+    'ht': 'fr-HT',
+    'zh': 'cmn-CN',
+    'fr': 'fr-FR',
 }
 
 # ── Session state ────────────────────────────────────────────────────────────
@@ -111,23 +123,29 @@ def _tts_generate_audio(lang, text):
         )
         return response.content, 'audio/mpeg'
 
-    # Google Gemini 2.5 Flash TTS
-    response = google_client.models.generate_content(
-        model='gemini-2.5-flash-preview-tts',
-        contents=text,
-        config=_google_types.GenerateContentConfig(
-            response_modalities=['AUDIO'],
-            speech_config=_google_types.SpeechConfig(
-                voice_config=_google_types.VoiceConfig(
-                    prebuilt_voice_config=_google_types.PrebuiltVoiceConfig(
-                        voice_name=GOOGLE_TTS_VOICES[lang],
-                    )
-                ),
-            ),
-        ),
+    # Google Cloud TTS — Gemini 2.5 Flash streaming synthesis
+    config_request = _texttospeech.StreamingSynthesizeRequest(
+        streaming_config=_texttospeech.StreamingSynthesizeConfig(
+            voice=_texttospeech.VoiceSelectionParams(
+                name=GOOGLE_TTS_VOICES[lang],
+                language_code=GOOGLE_TTS_LOCALES[lang],
+                model_name=GOOGLE_TTS_MODEL,
+            )
+        )
     )
-    pcm_data = response.candidates[0].content.parts[0].inline_data.data
-    return _pcm_to_wav(pcm_data), 'audio/wav'
+
+    def _request_generator():
+        yield config_request
+        yield _texttospeech.StreamingSynthesizeRequest(
+            input=_texttospeech.StreamingSynthesisInput(text=text)
+        )
+
+    pcm_chunks = []
+    for response in _tts_client.streaming_synthesize(_request_generator()):
+        if response.audio_content:
+            pcm_chunks.append(response.audio_content)
+
+    return _pcm_to_wav(b''.join(pcm_chunks)), 'audio/wav'
 
 
 def _generate_session_id():

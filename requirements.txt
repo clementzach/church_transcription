@@ -6,4 +6,4 @@ websocket-client
 gunicorn
 gevent
 openai
-google-genai
+google-cloud-texttospeech>=2.29.0
