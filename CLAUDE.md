@@ -2,7 +2,7 @@
 
 ## What this project is
 
-A live transcription and translation web app for church services. A broadcaster records audio; Gladia transcribes and translates it in real time; OpenAI TTS converts translations to speech; remote listeners hear audio and see captions in their chosen language (Spanish, Haitian Creole, or Portuguese).
+A live transcription and translation web app for church services. A broadcaster records audio; Gladia transcribes and translates it in real time; OpenAI TTS converts translations to speech; remote listeners hear audio and see captions in their chosen language (Spanish, Haitian Creole, Portuguese, Mandarin, or French).
 
 ## Architecture
 
@@ -26,8 +26,8 @@ Browser (broadcaster)
 | File | Purpose |
 |------|---------|
 | `app.py` | Flask backend — session management, WebSocket relay, TTS workers |
-| `static/index.html` | Broadcaster UI — mic capture, live caption grid (4 languages) |
-| `static/listen.html` | Listener UI — session login, caption display, audio playback |
+| `static/index.html` | Broadcaster UI — mic capture, live caption grid (6 languages), how-to guide modal |
+| `static/listen.html` | Listener UI — session login, caption display, audio playback, how-to guide modal |
 | `church-transcription.service` | Systemd unit for production (gunicorn + gevent, single worker) |
 
 ## Running locally
