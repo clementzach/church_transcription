@@ -41,7 +41,7 @@ _tts_client = _texttospeech.TextToSpeechClient(
     )
 )
 
-TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']
+TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
 
 # ── Google Cloud TTS config (Gemini 2.5 Flash, streaming) ──────────────────
 GOOGLE_TTS_MODEL = 'gemini-2.5-flash-tts'
@@ -51,6 +51,7 @@ GOOGLE_TTS_VOICES = {
     'ht': 'kore',
     'zh': 'fenrir',
     'fr': 'puck',
+    'no': 'Charon',
 }
 GOOGLE_TTS_LOCALES = {
     'es': 'es-US',
@@ -58,12 +59,14 @@ GOOGLE_TTS_LOCALES = {
     'ht': 'fr-HT',
     'zh': 'cmn-CN',
     'fr': 'fr-FR',
+    'no': 'nb-NO',
 }
 
 # After this many seconds with no new text, close the stream and reopen on demand.
 TTS_INACTIVITY_TIMEOUT = 30.0
 # Silence gap (seconds) between audio chunks that signals an utterance boundary.
 TTS_UTTERANCE_GAP = 0.2
+
 
 # ── Session state ─────────────────────────────────────────────────────────────
 # sessions[session_id] = {

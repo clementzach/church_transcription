@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSe2keI3J3rs/B+tBkpFqk4s0NubBT5FLBA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -18,6 +19,7 @@
     --pt: #a855f7;
     --zh: #06b6d4;
     --fr: #ec4899;
+    --no: #ef4444;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -101,6 +103,7 @@
   .panel-vis-btn[data-lang="pt"] { --c: var(--pt); }
   .panel-vis-btn[data-lang="zh"] { --c: var(--zh); }
   .panel-vis-btn[data-lang="fr"] { --c: var(--fr); }
+  .panel-vis-btn[data-lang="no"] { --c: var(--no); }
   .panel-vis-btn.hidden-panel {
     background: transparent;
     color: var(--c);
@@ -138,6 +141,7 @@
   .lang-btn[data-lang="pt"] { --c: var(--pt); }
   .lang-btn[data-lang="zh"] { --c: var(--zh); }
   .lang-btn[data-lang="fr"] { --c: var(--fr); }
+  .lang-btn[data-lang="no"] { --c: var(--no); }
   .lang-btn.active {
     background: var(--c);
     color: #fff;
@@ -209,6 +213,7 @@
   .panel[data-lang="pt"] { --accent: var(--pt); }
   .panel[data-lang="zh"] { --accent: var(--zh); }
   .panel[data-lang="fr"] { --accent: var(--fr); }
+  .panel[data-lang="no"] { --accent: var(--no); }
 
   .panel-tag {
     font-size: 11px;
@@ -318,6 +323,162 @@
     padding: 2px 7px;
   }
   #listener-link:hover { background: #f5f5f5; }
+
+  #copy-session-btn {
+    font-size: 11px;
+    color: #999;
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  #copy-session-btn:hover { background: #f5f5f5; }
+  #copy-session-btn.copied { color: #22c55e; border-color: #22c55e; }
+
+  /* ── Guide modal ── */
+  #guide-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #guide-overlay.open { display: flex; }
+
+  #guide-modal {
+    background: var(--bg);
+    border-radius: 12px;
+    padding: 28px 32px;
+    max-width: 560px;
+    width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    position: relative;
+  }
+
+  #guide-modal h2 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 20px;
+  }
+
+  #guide-modal h3 {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #888;
+    margin: 18px 0 8px;
+  }
+
+  #guide-modal ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  #guide-modal li {
+    font-size: 14px;
+    line-height: 1.5;
+    padding-left: 14px;
+    position: relative;
+  }
+
+  #guide-modal li::before {
+    content: '·';
+    position: absolute;
+    left: 2px;
+    color: #aaa;
+  }
+
+  #guide-modal li strong {
+    font-weight: 600;
+  }
+
+  #guide-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #guide-close:hover { background: #f0f0f0; color: #333; }
+  #guide-modal a { color: #3b82f6; }
+
+  /* ── QR modal ── */
+  #qr-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #qr-overlay.open { display: flex; }
+
+  #qr-modal {
+    background: var(--bg);
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 320px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  #qr-modal h2 {
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  #qr-code-box {
+    width: 240px;
+    height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #qr-url-text {
+    font-size: 11px;
+    color: #aaa;
+    text-align: center;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  #qr-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #qr-close:hover { background: #f0f0f0; color: #333; }
 </style>
 </head>
 <body>
@@ -330,6 +491,7 @@
     <div id="session-info">
       <span id="session-id-label">Session</span>
       <span id="session-id-value">——————</span>
+      <button id="copy-session-btn" disabled title="Copy session ID">Copy</button>
       <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
     </div>
 
@@ -337,6 +499,8 @@
       <button class="ctrl-btn" id="start-btn">Start</button>
       <button class="ctrl-btn" id="stop-btn" disabled>Stop</button>
       <button class="ctrl-btn" id="fs-btn">⛶</button>
+      <button class="ctrl-btn" id="qr-btn" disabled title="Show QR code for listeners">QR</button>
+      <button class="ctrl-btn" id="guide-btn" title="How to use">?</button>
       <div id="status-dot"></div>
     </div>
   </div>
@@ -352,6 +516,7 @@
         <button class="lang-btn" data-lang="pt">PT</button>
         <button class="lang-btn" data-lang="zh">ZH</button>
         <button class="lang-btn" data-lang="fr">FR</button>
+        <button class="lang-btn" data-lang="no">NO</button>
       </div>
     </div>
     <div class="toggle-row">
@@ -363,6 +528,7 @@
         <button class="panel-vis-btn" data-lang="pt">PT</button>
         <button class="panel-vis-btn" data-lang="zh">ZH</button>
         <button class="panel-vis-btn" data-lang="fr">FR</button>
+        <button class="panel-vis-btn" data-lang="no">NO</button>
       </div>
     </div>
   </div>
@@ -394,6 +560,67 @@
     <div class="panel-tag">FR</div>
     <div class="panel-lines" id="lines-fr"></div>
   </div>
+  <div class="panel" data-lang="no">
+    <div class="panel-tag">NO</div>
+    <div class="panel-lines" id="lines-no"></div>
+  </div>
+</div>
+
+<!-- QR modal -->
+<div id="qr-overlay">
+  <div id="qr-modal">
+    <button id="qr-close" aria-label="Close QR code">&#x2715;</button>
+    <h2>Scan to Join</h2>
+    <div id="qr-code-box"></div>
+    <p id="qr-url-text"></p>
+  </div>
+</div>
+
+<!-- Guide modal -->
+<div id="guide-overlay">
+  <div id="guide-modal">
+    <button id="guide-close" aria-label="Close guide">&#x2715;</button>
+    <h2>How to Use</h2>
+
+    <h3>Are you a listener?</h3>
+    <ul>
+      <li>This page is for the <strong>broadcaster</strong> (the person running the microphone). If you want to read captions or hear translated audio, go to the <strong><a href="/church_transcription/listen" target="_blank">Listener page ↗</a></strong> instead.</li>
+    </ul>
+
+    <h3>Starting a session</h3>
+    <ul>
+      <li>Click <strong>Start</strong> and allow microphone access when prompted. A session ID will appear in the top bar.</li>
+      <li>Share the session ID with listeners so they can follow along on their devices at the Listener page.</li>
+      <li>Click <strong>Stop</strong> to end the session. Sessions automatically expire after 2 hours.</li>
+    </ul>
+
+    <h3>Spoken language</h3>
+    <ul>
+      <li><strong>AUTO</strong> — Gladia detects the spoken language automatically. Use this when the speaker may switch languages.</li>
+      <li><strong>EN / ES / HT / PT / ZH / FR</strong> — Pin to a specific spoken language for faster, more accurate transcription. All other languages still receive translated captions.</li>
+      <li>Changing this setting while live silently reconnects the session.</li>
+    </ul>
+
+    <h3>Caption panels</h3>
+    <ul>
+      <li>The grid shows live captions in up to six languages simultaneously: English, Spanish, Haitian Creole, Portuguese, Mandarin, and French.</li>
+      <li>The most recent line is shown largest; older lines fade and shrink above it.</li>
+      <li>Italic text in a panel is a live partial (in-progress utterance); it becomes solid once the sentence is finalised.</li>
+    </ul>
+
+    <h3>Show panels buttons</h3>
+    <ul>
+      <li>Toggle individual language panels on or off. At least one panel must remain visible.</li>
+      <li>Hidden panels are dimmed with a transparent background; visible panels are solid-coloured.</li>
+    </ul>
+
+    <h3>Other controls</h3>
+    <ul>
+      <li><strong>⛶</strong> — Enter fullscreen. The header is hidden in fullscreen for a clean caption display.</li>
+      <li><strong>Hide controls</strong> (bottom bar) — Hides the header without going fullscreen. Click <strong>Show controls</strong> to bring it back.</li>
+      <li><strong>Listener ↗</strong> — Opens the Listener page in a new tab so you can preview what remote listeners see.</li>
+    </ul>
+  </div>
 </div>
 
 <!-- Bottom bar -->
@@ -405,8 +632,8 @@
 
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
-const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr'];
-const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']; // non-English target languages
+const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
+const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
 const GLADIA_CONFIG_BASE = {
   encoding: 'wav/pcm',
   sample_rate: 16000,
@@ -449,6 +676,8 @@ const fsBtn         = document.getElementById('fs-btn');
 const statusDot     = document.getElementById('status-dot');
 const bottomPartial = document.getElementById('bottom-partial');
 const sessionIdEl   = document.getElementById('session-id-value');
+const copySessionBtn = document.getElementById('copy-session-btn');
+const qrBtn          = document.getElementById('qr-btn');
 
 // ── Language toggle ────────────────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -587,7 +816,7 @@ async function startSession() {
     const data = await resp.json();
     gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
     if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
-    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; }
+    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; qrBtn.disabled = false; }
   } catch (err) {
     alert('Failed to start session: ' + err.message);
     return;
@@ -782,6 +1011,58 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
     updateGridLayout();
   });
 });
+
+// ── QR code modal ─────────────────────────────────────────────────────────
+const qrOverlay = document.getElementById('qr-overlay');
+let qrInstance = null;
+
+qrBtn.addEventListener('click', () => {
+  if (!currentSessionId) return;
+  // Derive listener URL from the existing Listener link — never hardcoded
+  const listenerHref = document.getElementById('listener-link').href;
+  const qrUrl = listenerHref + '?session=' + currentSessionId;
+
+  const box = document.getElementById('qr-code-box');
+  box.innerHTML = '';
+  qrInstance = new QRCode(box, {
+    text: qrUrl,
+    width: 240,
+    height: 240,
+    colorDark: '#111111',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+  document.getElementById('qr-url-text').textContent = qrUrl;
+  qrOverlay.classList.add('open');
+});
+
+document.getElementById('qr-close').addEventListener('click', () => qrOverlay.classList.remove('open'));
+qrOverlay.addEventListener('click', (e) => { if (e.target === qrOverlay) qrOverlay.classList.remove('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { qrOverlay.classList.remove('open'); } });
+
+// ── Copy session ID ───────────────────────────────────────────────────────
+copySessionBtn.addEventListener('click', () => {
+  if (!currentSessionId) return;
+  navigator.clipboard.writeText(currentSessionId).then(() => {
+    copySessionBtn.textContent = 'Copied!';
+    copySessionBtn.classList.add('copied');
+    setTimeout(() => {
+      copySessionBtn.textContent = 'Copy';
+      copySessionBtn.classList.remove('copied');
+    }, 2000);
+  }).catch(() => {
+    // Fallback for browsers that block clipboard without HTTPS
+    sessionIdEl.focus();
+    window.getSelection()?.selectAllChildren(sessionIdEl);
+  });
+});
+
+// ── Guide modal ───────────────────────────────────────────────────────────
+const guideOverlay = document.getElementById('guide-overlay');
+document.getElementById('guide-btn').addEventListener('click', () => guideOverlay.classList.add('open'));
+document.getElementById('guide-close').addEventListener('click', () => guideOverlay.classList.remove('open'));
+guideOverlay.addEventListener('click', (e) => { if (e.target === guideOverlay) guideOverlay.classList.remove('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') guideOverlay.classList.remove('open'); });
 
 // ── Init render ───────────────────────────────────────────────────────────
 ALL_LANGS.forEach(renderPanel);
