@@ -18,6 +18,7 @@
     --pt: #a855f7;
     --zh: #06b6d4;
     --fr: #ec4899;
+    --no: #ef4444;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -101,6 +102,7 @@
   .panel-vis-btn[data-lang="pt"] { --c: var(--pt); }
   .panel-vis-btn[data-lang="zh"] { --c: var(--zh); }
   .panel-vis-btn[data-lang="fr"] { --c: var(--fr); }
+  .panel-vis-btn[data-lang="no"] { --c: var(--no); }
   .panel-vis-btn.hidden-panel {
     background: transparent;
     color: var(--c);
@@ -138,6 +140,7 @@
   .lang-btn[data-lang="pt"] { --c: var(--pt); }
   .lang-btn[data-lang="zh"] { --c: var(--zh); }
   .lang-btn[data-lang="fr"] { --c: var(--fr); }
+  .lang-btn[data-lang="no"] { --c: var(--no); }
   .lang-btn.active {
     background: var(--c);
     color: #fff;
@@ -209,6 +212,7 @@
   .panel[data-lang="pt"] { --accent: var(--pt); }
   .panel[data-lang="zh"] { --accent: var(--zh); }
   .panel[data-lang="fr"] { --accent: var(--fr); }
+  .panel[data-lang="no"] { --accent: var(--no); }
 
   .panel-tag {
     font-size: 11px;
@@ -352,6 +356,7 @@
         <button class="lang-btn" data-lang="pt">PT</button>
         <button class="lang-btn" data-lang="zh">ZH</button>
         <button class="lang-btn" data-lang="fr">FR</button>
+        <button class="lang-btn" data-lang="no">NO</button>
       </div>
     </div>
     <div class="toggle-row">
@@ -363,6 +368,7 @@
         <button class="panel-vis-btn" data-lang="pt">PT</button>
         <button class="panel-vis-btn" data-lang="zh">ZH</button>
         <button class="panel-vis-btn" data-lang="fr">FR</button>
+        <button class="panel-vis-btn" data-lang="no">NO</button>
       </div>
     </div>
   </div>
@@ -394,6 +400,10 @@
     <div class="panel-tag">FR</div>
     <div class="panel-lines" id="lines-fr"></div>
   </div>
+  <div class="panel" data-lang="no">
+    <div class="panel-tag">NO</div>
+    <div class="panel-lines" id="lines-no"></div>
+  </div>
 </div>
 
 <!-- Bottom bar -->
@@ -405,8 +415,8 @@
 
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
-const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr'];
-const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']; // non-English target languages
+const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
+const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
 const GLADIA_CONFIG_BASE = {
   encoding: 'wav/pcm',
   sample_rate: 16000,
