@@ -4,5 +4,4 @@ python-dotenv
 requests
 websocket-client
 gunicorn
-gevent
 google-cloud-texttospeech>=2.29.0
