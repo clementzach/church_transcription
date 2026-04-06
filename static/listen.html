@@ -550,11 +550,12 @@ let selectedLang = null;
 let ws = null;
 const history = [];       // committed lines, max 3
 
-// Audio queue
-const audioQueue = [];
-let isPlaying = false;
-let currentAudioMime = 'audio/wav';
-let audioUnlocked = false;  // requires user gesture before playback
+// Audio streaming via AudioContext
+let audioCtx = null;
+let nextPlayTime = 0;                       // when the last scheduled chunk ends
+let audioConfig = { sampleRate: 24000, channels: 1, sampleWidth: 2 };
+const audioQueue = [];                      // raw PCM ArrayBuffers held until unlocked
+let audioUnlocked = false;                  // requires user gesture before playback
 
 // ── Login UI ───────────────────────────────────────────────────────────────
 const sessionInput = document.getElementById('session-id-input');
@@ -617,8 +618,8 @@ function connect() {
       ws.close();
       return;
     }
-    if (msg.type === 'audio_info') {
-      currentAudioMime = msg.mime_type;
+    if (msg.type === 'audio_config') {
+      audioConfig = { sampleRate: msg.sample_rate, channels: msg.channels, sampleWidth: msg.sample_width };
       return;
     }
     if (msg.type === 'text') {
@@ -707,43 +708,54 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Audio queue ────────────────────────────────────────────────────────────
+// ── Audio streaming (AudioContext) ─────────────────────────────────────────
 function unlockAudio() {
   audioUnlocked = true;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume();
+  nextPlayTime = 0;
   document.getElementById('start-audio-btn').style.display = 'none';
-  if (!isPlaying && audioQueue.length > 0) playNext();
+
+  // Drain pre-unlock queue; drop excess to avoid a backlog of stale audio.
+  if (audioQueue.length > 10) audioQueue.splice(0, audioQueue.length - 10);
+  while (audioQueue.length > 0) scheduleChunk(audioQueue.shift());
 }
 
 function enqueueAudio(buffer) {
-  // Drop oldest queued item if behind by more than 1
-  if (audioQueue.length > 1) audioQueue.shift();
-  audioQueue.push(buffer);
-  if (!isPlaying && audioUnlocked) playNext();
-}
-
-function playNext() {
-  if (!audioUnlocked || audioQueue.length === 0) {
-    isPlaying = false;
-    setAudioDot(false);
+  if (!audioUnlocked) {
+    audioQueue.push(buffer);
+    // Don't let the pre-unlock queue grow unbounded.
+    if (audioQueue.length > 30) audioQueue.shift();
     return;
   }
-  isPlaying = true;
-  setAudioDot(true);
+  scheduleChunk(buffer);
+}
 
-  const buffer = audioQueue.shift();
-  const blob = new Blob([buffer], { type: currentAudioMime });
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  let done = false;
-  function advance() {
-    if (done) return;
-    done = true;
-    URL.revokeObjectURL(url);
-    playNext();
-  }
-  audio.onended = advance;
-  audio.onerror = (e) => { console.warn('[audio] playback error', e); advance(); };
-  audio.play().catch((e) => { console.warn('[audio] play() rejected', e); advance(); });
+function scheduleChunk(buffer) {
+  // Convert Int16 PCM → Float32 for the AudioBuffer.
+  const int16   = new Int16Array(buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768.0;
+
+  const { sampleRate, channels } = audioConfig;
+  const frames = float32.length / channels;
+  const audioBuf = audioCtx.createBuffer(channels, frames, sampleRate);
+  for (let c = 0; c < channels; c++) audioBuf.copyToChannel(float32, c);
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = audioBuf;
+  source.connect(audioCtx.destination);
+
+  const now = audioCtx.currentTime;
+  // Schedule immediately after the previous chunk, with a small lookahead.
+  const startAt = Math.max(now + 0.02, nextPlayTime);
+  source.start(startAt);
+  nextPlayTime = startAt + audioBuf.duration;
+
+  setAudioDot(true);
+  source.onended = () => {
+    if (audioCtx.currentTime >= nextPlayTime - 0.1) setAudioDot(false);
+  };
 }
 
 function setAudioDot(playing) {
