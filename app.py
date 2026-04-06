@@ -152,13 +152,31 @@ def _enqueue_tts(session_id, lang, text):
             pass
 
 
+TTS_INACTIVITY_TIMEOUT = 30.0  # seconds of silence before closing the gRPC stream
+
+
 def _tts_worker(session_id, lang):
     """Per-(session, lang) TTS worker.
 
-    Waits for translated text on tts_queues[lang], opens one streaming
-    streaming_synthesize call per utterance, and broadcasts each PCM chunk to
-    listeners as it arrives (raw bytes, 24 kHz / 16-bit / mono).  The caption
-    text is broadcast before synthesis begins so it appears immediately.
+    Maintains one long-lived streaming_synthesize call that accepts multiple
+    utterances, keeping the call count well within API rate limits.  The stream
+    is closed after TTS_INACTIVITY_TIMEOUT seconds of silence and reopened on
+    the next utterance.
+
+    Architecture
+    ────────────
+    request_gen (runs in gRPC's background thread)
+      • Reads text from tts_queues[lang], broadcasts the caption, then yields
+        the synthesis request.
+      • Returns (closing the stream) after TTS_INACTIVITY_TIMEOUT of silence
+        or when the None shutdown sentinel is received.
+
+    response_reader (daemon thread)
+      • Iterates the streaming responses and broadcasts each raw PCM chunk
+        to listeners immediately as it arrives.
+
+    The main worker loop simply starts a reader thread and waits for it to
+    finish, then loops to open a fresh stream (unless shutdown).
     """
     log.info("TTS worker started: session=%s lang=%s", session_id, lang)
 
@@ -178,34 +196,57 @@ def _tts_worker(session_id, lang):
         )
     )
 
-    while True:
-        try:
-            text = tts_q.get(timeout=1.0)
-        except queue.Empty:
-            with _lock:
-                if session_id not in sessions:
-                    break
-            continue
+    shutdown = threading.Event()
 
-        if text is None:
-            break
+    while not shutdown.is_set():
+        call_alive = threading.Event()
+        call_alive.set()
 
-        # Broadcast caption text immediately so it appears before audio arrives.
-        _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
-        log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
-
-        def make_requests(_text=text):
+        def request_gen(_alive=call_alive):
+            """Yields synthesis requests; consumed by gRPC in its background thread."""
             yield config_req
-            yield _texttospeech.StreamingSynthesizeRequest(
-                input=_texttospeech.StreamingSynthesisInput(text=_text)
-            )
+            inactive_since = None
+            while _alive.is_set():
+                try:
+                    text = tts_q.get(timeout=0.2)
+                    inactive_since = None
+                except queue.Empty:
+                    if inactive_since is None:
+                        inactive_since = time.time()
+                    elif time.time() - inactive_since >= TTS_INACTIVITY_TIMEOUT:
+                        log.info("[tts:%s:%s] Inactivity timeout — closing stream", session_id, lang)
+                        _alive.clear()
+                        return
+                    continue
+                if text is None:
+                    shutdown.set()
+                    _alive.clear()
+                    return
+                # Caption first so text appears before audio arrives.
+                _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
+                log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
+                yield _texttospeech.StreamingSynthesizeRequest(
+                    input=_texttospeech.StreamingSynthesisInput(text=text)
+                )
 
-        try:
-            for response in _tts_client.streaming_synthesize(make_requests()):
-                if response.audio_content:
-                    _broadcast(session_id, lang, response.audio_content)
-        except Exception as e:
-            log.error("[tts:%s:%s] TTS error: %s", session_id, lang, e)
+        def response_reader(_rg=request_gen):
+            """Streams responses; broadcasts each raw PCM chunk immediately."""
+            try:
+                for response in _tts_client.streaming_synthesize(_rg()):
+                    if response.audio_content:
+                        _broadcast(session_id, lang, response.audio_content)
+            except Exception as e:
+                if not shutdown.is_set():
+                    log.error("[tts:%s:%s] Stream error: %s", session_id, lang, e)
+            finally:
+                call_alive.clear()
+
+        reader_thread = threading.Thread(target=response_reader, daemon=True)
+        reader_thread.start()
+        reader_thread.join()
+
+        if not shutdown.is_set():
+            time.sleep(0.2)  # brief pause before reopening
 
     log.info("TTS worker stopped: session=%s lang=%s", session_id, lang)
 
