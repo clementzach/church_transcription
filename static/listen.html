@@ -549,6 +549,8 @@ const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh:
 let selectedLang = null;
 let ws = null;
 const history = [];       // committed lines, max 3
+let pendingChunks = [];   // chunks waiting to be shown after a delay
+let chunkTimer = null;
 
 // Audio streaming via AudioContext
 let audioCtx = null;
@@ -700,6 +702,8 @@ function chunkText(text) {
   return chunks;
 }
 
+const CHUNK_DELAY_MS = 1200; // time each chunk stays as the "current" line before next appears
+
 function commitLine(text) {
   if (!text || !text.trim()) return;
 
@@ -708,11 +712,27 @@ function commitLine(text) {
     showListenerScreen(sessionInput.value);
   }
 
+  // Cancel any pending chunks from a previous utterance and start fresh.
+  if (chunkTimer) { clearTimeout(chunkTimer); chunkTimer = null; }
+
   const chunks = chunkText(text.trim());
-  for (const chunk of chunks) {
-    history.push(chunk);
-    if (history.length > 3) history.shift();
-  }
+  pendingChunks = chunks.slice(1);
+  pushChunk(chunks[0]);
+  if (pendingChunks.length > 0) scheduleNextChunk();
+}
+
+function scheduleNextChunk() {
+  chunkTimer = setTimeout(() => {
+    chunkTimer = null;
+    if (pendingChunks.length === 0) return;
+    pushChunk(pendingChunks.shift());
+    if (pendingChunks.length > 0) scheduleNextChunk();
+  }, CHUNK_DELAY_MS);
+}
+
+function pushChunk(chunk) {
+  history.push(chunk);
+  if (history.length > 3) history.shift();
   renderLines();
 }
 

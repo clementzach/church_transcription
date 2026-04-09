@@ -668,6 +668,10 @@ let reconnectTimer = null;
 const history = { en: [], es: [], ht: [], pt: [], zh: [], fr: [] };
 // Current partial text per panel (only source panel uses it)
 const partials = { en: '', es: '', ht: '', pt: '', zh: '', fr: '' };
+// Chunks queued for delayed display, and their timers, per panel
+const pendingChunks = Object.fromEntries(ALL_LANGS.map(l => [l, []]));
+const chunkTimers   = Object.fromEntries(ALL_LANGS.map(l => [l, null]));
+const CHUNK_DELAY_MS = 1200;
 
 // ── UI refs ────────────────────────────────────────────────────────────────
 const startBtn      = document.getElementById('start-btn');
@@ -782,12 +786,27 @@ function chunkText(text) {
 
 function commitLine(lang, text) {
   if (!text || !text.trim()) return;
-  const chunks = chunkText(text.trim());
-  for (const chunk of chunks) {
-    history[lang].push(chunk);
-    if (history[lang].length > 3) history[lang].shift();
-  }
+  // Cancel any pending chunks from a previous utterance on this panel.
+  if (chunkTimers[lang]) { clearTimeout(chunkTimers[lang]); chunkTimers[lang] = null; }
   partials[lang] = '';
+  const chunks = chunkText(text.trim());
+  pendingChunks[lang] = chunks.slice(1);
+  pushChunk(lang, chunks[0]);
+  if (pendingChunks[lang].length > 0) scheduleNextChunk(lang);
+}
+
+function scheduleNextChunk(lang) {
+  chunkTimers[lang] = setTimeout(() => {
+    chunkTimers[lang] = null;
+    if (pendingChunks[lang].length === 0) return;
+    pushChunk(lang, pendingChunks[lang].shift());
+    if (pendingChunks[lang].length > 0) scheduleNextChunk(lang);
+  }, CHUNK_DELAY_MS);
+}
+
+function pushChunk(lang, chunk) {
+  history[lang].push(chunk);
+  if (history[lang].length > 3) history[lang].shift();
   renderPanel(lang);
 }
 
@@ -802,6 +821,8 @@ function setPartial(lang, text) {
 function clearPanels() {
   detectedSourceLang = 'en';
   ALL_LANGS.forEach(l => {
+    if (chunkTimers[l]) { clearTimeout(chunkTimers[l]); chunkTimers[l] = null; }
+    pendingChunks[l] = [];
     history[l] = [];
     partials[l] = '';
     renderPanel(l);
