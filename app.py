@@ -40,14 +40,31 @@ _tts_client = _texttospeech.TextToSpeechClient(
 
 TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
 
-# ── Google Cloud TTS config (Gemini 2.5 Flash, streaming) ──────────────────
-GOOGLE_TTS_MODEL = 'gemini-2.5-flash-tts'
+# ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
+OPENAI_TTS_VOICES = {
+    'es': 'nova',
+    'pt': 'shimmer',
+    'ht': 'alloy',
+    'zh': 'nova',
+    'fr': 'echo',
+    'no': 'alloy',
+}
+OPENAI_TTS_INSTRUCTIONS = {
+    'es': 'Speak naturally and clearly in Spanish.',
+    'pt': 'Fale de forma natural e clara em português.',
+    'ht': 'Ou pale kreyòl tankou yon natif natal',
+    'zh': '请用标准普通话自然流利地朗读，像母语人士一样说话，发音清晰，语调自然。',
+    'fr': 'Parlez de manière naturelle et claire en français.',
+    'no': 'Snakk naturlig og tydelig på norsk.',
+}
+
+# ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
 GOOGLE_TTS_VOICES = {
-    'es': 'charon',
-    'pt': 'aoede',
-    'ht': 'kore',
-    'zh': 'fenrir',
-    'fr': 'puck',
+    'es': 'Charon',
+    'pt': 'Aoede',
+    'ht': 'Kore',
+    'zh': 'Fenrir',
+    'fr': 'Puck',
     'no': 'Charon',
 }
 GOOGLE_TTS_LOCALES = {
@@ -105,7 +122,6 @@ def _broadcast(session_id, lang, message):
         if not session:
             return
         listeners = list(session['listener_registry'].get(lang, []))
-
     for q in listeners:
         try:
             _loop.call_soon_threadsafe(q.put_nowait, message)
@@ -173,17 +189,22 @@ def _tts_worker(session_id, lang):
             return
         tts_q = session['tts_queues'][lang]
 
+    shutdown = threading.Event()
+
+    locale = GOOGLE_TTS_LOCALES[lang]
+    voice_name = f"{locale}-Standard-A"
     config_req = _texttospeech.StreamingSynthesizeRequest(
         streaming_config=_texttospeech.StreamingSynthesizeConfig(
             voice=_texttospeech.VoiceSelectionParams(
-                name=GOOGLE_TTS_VOICES[lang],
-                language_code=GOOGLE_TTS_LOCALES[lang],
-                model_name=GOOGLE_TTS_MODEL,
-            )
+                language_code=locale,
+                name=voice_name,
+            ),
+            streaming_audio_config=_texttospeech.StreamingAudioConfig(
+                audio_encoding=_texttospeech.AudioEncoding.LINEAR16,
+                sample_rate_hertz=24000,
+            ),
         )
     )
-
-    shutdown = threading.Event()
 
     while not shutdown.is_set():
         call_alive = threading.Event()
@@ -232,7 +253,7 @@ def _tts_worker(session_id, lang):
     log.info("TTS worker stopped: session=%s lang=%s", session_id, lang)
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Routes ─────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def index():
