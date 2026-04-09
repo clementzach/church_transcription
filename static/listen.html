@@ -676,6 +676,30 @@ function showListenerScreen(sessionId) {
 }
 
 // ── Caption display ────────────────────────────────────────────────────────
+// Split text into chunks of at most CHUNK_MAX_CHARS characters, breaking at
+// word boundaries.  This prevents long utterances from overflowing the panel
+// and showing only the last few words.
+const CHUNK_MAX_CHARS = 60;
+
+function chunkText(text) {
+  if (text.length <= CHUNK_MAX_CHARS) return [text];
+  const words = text.split(/\s+/);
+  const chunks = [];
+  let cur = '';
+  for (const w of words) {
+    if (!cur) {
+      cur = w;
+    } else if (cur.length + 1 + w.length <= CHUNK_MAX_CHARS) {
+      cur += ' ' + w;
+    } else {
+      chunks.push(cur);
+      cur = w;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
 function commitLine(text) {
   if (!text || !text.trim()) return;
 
@@ -684,8 +708,11 @@ function commitLine(text) {
     showListenerScreen(sessionInput.value);
   }
 
-  history.push(text.trim());
-  if (history.length > 3) history.shift();
+  const chunks = chunkText(text.trim());
+  for (const chunk of chunks) {
+    history.push(chunk);
+    if (history.length > 3) history.shift();
+  }
   renderLines();
 }
 
