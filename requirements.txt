@@ -1,9 +1,6 @@
-flask
-flask-sock
+fastapi
+uvicorn[standard]
 python-dotenv
-requests
-websocket-client
-gunicorn
-gevent
-openai
-google-genai
+httpx
+websockets
+google-cloud-texttospeech>=2.29.0
