@@ -549,7 +549,7 @@ const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh:
 let selectedLang = null;
 let ws = null;
 const history = [];       // committed lines, max 3
-let pendingChunks = [];   // chunks waiting to be shown after a delay
+let pendingChunks = [];   // flat queue — new utterances append; drains at CHUNK_DELAY_MS
 let chunkTimer = null;
 
 // Audio streaming via AudioContext
@@ -712,22 +712,15 @@ function commitLine(text) {
     showListenerScreen(sessionInput.value);
   }
 
-  // Cancel any pending chunks from a previous utterance and start fresh.
-  if (chunkTimer) { clearTimeout(chunkTimer); chunkTimer = null; }
-
-  const chunks = chunkText(text.trim());
-  pendingChunks = chunks.slice(1);
-  pushChunk(chunks[0]);
-  if (pendingChunks.length > 0) scheduleNextChunk();
+  // Append all chunks to the flat queue; start draining only if idle.
+  chunkText(text.trim()).forEach(c => pendingChunks.push(c));
+  if (chunkTimer === null) processNextChunk();
 }
 
-function scheduleNextChunk() {
-  chunkTimer = setTimeout(() => {
-    chunkTimer = null;
-    if (pendingChunks.length === 0) return;
-    pushChunk(pendingChunks.shift());
-    if (pendingChunks.length > 0) scheduleNextChunk();
-  }, CHUNK_DELAY_MS);
+function processNextChunk() {
+  if (pendingChunks.length === 0) { chunkTimer = null; return; }
+  pushChunk(pendingChunks.shift());
+  chunkTimer = setTimeout(processNextChunk, CHUNK_DELAY_MS);
 }
 
 function pushChunk(chunk) {

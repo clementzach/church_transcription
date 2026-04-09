@@ -668,7 +668,7 @@ let reconnectTimer = null;
 const history = { en: [], es: [], ht: [], pt: [], zh: [], fr: [] };
 // Current partial text per panel (only source panel uses it)
 const partials = { en: '', es: '', ht: '', pt: '', zh: '', fr: '' };
-// Chunks queued for delayed display, and their timers, per panel
+// Flat chunk queues per panel — new utterances append; drain at CHUNK_DELAY_MS
 const pendingChunks = Object.fromEntries(ALL_LANGS.map(l => [l, []]));
 const chunkTimers   = Object.fromEntries(ALL_LANGS.map(l => [l, null]));
 const CHUNK_DELAY_MS = 1200;
@@ -786,22 +786,16 @@ function chunkText(text) {
 
 function commitLine(lang, text) {
   if (!text || !text.trim()) return;
-  // Cancel any pending chunks from a previous utterance on this panel.
-  if (chunkTimers[lang]) { clearTimeout(chunkTimers[lang]); chunkTimers[lang] = null; }
   partials[lang] = '';
-  const chunks = chunkText(text.trim());
-  pendingChunks[lang] = chunks.slice(1);
-  pushChunk(lang, chunks[0]);
-  if (pendingChunks[lang].length > 0) scheduleNextChunk(lang);
+  // Append all chunks to the flat queue; start draining only if idle.
+  chunkText(text.trim()).forEach(c => pendingChunks[lang].push(c));
+  if (chunkTimers[lang] === null) processNextChunk(lang);
 }
 
-function scheduleNextChunk(lang) {
-  chunkTimers[lang] = setTimeout(() => {
-    chunkTimers[lang] = null;
-    if (pendingChunks[lang].length === 0) return;
-    pushChunk(lang, pendingChunks[lang].shift());
-    if (pendingChunks[lang].length > 0) scheduleNextChunk(lang);
-  }, CHUNK_DELAY_MS);
+function processNextChunk(lang) {
+  if (pendingChunks[lang].length === 0) { chunkTimers[lang] = null; return; }
+  pushChunk(lang, pendingChunks[lang].shift());
+  chunkTimers[lang] = setTimeout(() => processNextChunk(lang), CHUNK_DELAY_MS);
 }
 
 function pushChunk(lang, chunk) {
@@ -821,7 +815,7 @@ function setPartial(lang, text) {
 function clearPanels() {
   detectedSourceLang = 'en';
   ALL_LANGS.forEach(l => {
-    if (chunkTimers[l]) { clearTimeout(chunkTimers[l]); chunkTimers[l] = null; }
+    if (chunkTimers[l] !== null) { clearTimeout(chunkTimers[l]); chunkTimers[l] = null; }
     pendingChunks[l] = [];
     history[l] = [];
     partials[l] = '';
