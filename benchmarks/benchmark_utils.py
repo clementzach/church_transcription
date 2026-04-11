@@ -30,6 +30,7 @@ import threading
 import time
 from collections import defaultdict
 from typing import Callable, Optional
+import time
 
 import anthropic
 import certifi
@@ -322,10 +323,10 @@ def compute_llm_score(
     Returns float("nan") on any error.
     """
     prompt = (
-        "You are evaluating the quality of a speech transcription.\n\n"
+        "You are evaluating the quality of a speech transcription. Note that the ground truth text may contain additional footnotes or reference not spoken in the transcription. You may ignore those while making your evaluation.\n\n"
         
         "Rate the transcription quality on a scale from 1 to 8:\n"
-        "8 = Perfect transcription. There are no errors and the transcription matches the ground truth perfectly.\n"
+        "8 = Perfect transcription. There are no errors and the transcription matches the ground truth perfectly besides any footnotes existing in the ground truth.\n"
         "7 = Nearly Perfect transcription. There may be minor inconsistencies in spelling or formatting but a human would be able to understand the full meaning of every part of the transcription perfectly.\n"
         "6 = Very Good transcription. Some words in the transcription may differ, but a human would be able to understand the general content of each part of the transcription .\n"
          "5 = Good transcription. Many words in the transcription may differ, but a human would be able to understand the general content of most parts of the transcription .\n"
@@ -333,12 +334,13 @@ def compute_llm_score(
         "3 = Poor. A human may be able to guess at the general subject of the transcription based on some of the words, and they may be able to understand the content of some sections, but most sections are garbled and impossible to understand.\n"
         "2 = Very Poor. A human may be able to guess at the general subject of the transcription based on some of the words, but would not be able to understand any of the points the speaker is trying to convey.\n"
         "1 = Completely unusable. No or very few words match between the ground truth and transcription. Words do not follow grammatical structure.\n\n"
-        "Respond with only a single integer (1-8)."
-
         f"Ground truth: ```\n{reference}\n```\n"
         f"Transcription: ```\n{hypothesis}\n```\n"
+        "Respond with only a single integer (1-8). Do not include anything else in your response. \n"
+        "Correct example responses are:\n```5```\n```1```\n```3``` . \n"
     )
     try:
+        time.sleep(60)
         response = anthropic.Anthropic().messages.create(
             model="claude-sonnet-4-6",
             max_tokens=16,
