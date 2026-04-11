@@ -345,7 +345,13 @@ def compute_llm_score(
             messages=[{"role": "user", "content": prompt}],
         )
         return float(response.content[0].text.strip())
-    except Exception:
+    except Exception as e:
+        error_str = "Error with llm! " + str(e)
+        try:
+            error_str = error_str + " " + str(response.content[0].text)
+        except:
+            pass
+        print(error_str)
         return float("nan")
 
 
@@ -406,6 +412,10 @@ async def _gladia_transcribe_async(
     if realtime:
         config["realtime_processing"] = realtime
 
+    # Pre-load audio before opening the WebSocket so the blocking ffmpeg decode
+    # does not stall the event loop after the connection is established.
+    audio_chunks = list(stream_audio_chunks(audio_path))
+
     async with httpx.AsyncClient(verify=certifi.where()) as client:
         resp = await client.post(
             "https://api.gladia.io/v2/live",
@@ -426,7 +436,7 @@ async def _gladia_transcribe_async(
 
     async with websockets.connect(ws_url, ssl=_SSL_CTX) as ws:
         async def _send():
-            for chunk in stream_audio_chunks(audio_path):
+            for chunk in audio_chunks:
                 await ws.send(chunk)
                 await asyncio.sleep(CHUNK_MS / 1000)
             await ws.send(json.dumps({"type": "stop_recording"}))
@@ -514,6 +524,11 @@ async def _assemblyai_transcribe_async(
 ) -> str:
     if not ASSEMBLYAI_API_KEY:
         raise RuntimeError("ASSEMBLYAI_API_KEY is not set in .env")
+
+    # Pre-load audio before opening the WebSocket so the blocking ffmpeg decode
+    # does not stall the event loop after the connection is established.
+    audio_chunks = list(stream_audio_chunks(audio_path))
+
     params: list[tuple[str, str]] = [
         ("speech_model", speech_model),
         ("encoding",     "pcm_s16le"),
@@ -530,7 +545,7 @@ async def _assemblyai_transcribe_async(
 
     async with websockets.connect(url, ssl=_SSL_CTX) as ws:
         async def _send():
-            for chunk in stream_audio_chunks(audio_path):
+            for chunk in audio_chunks:
                 await ws.send(chunk)
                 await asyncio.sleep(CHUNK_MS / 1000)
             await ws.send(json.dumps({"type": "Terminate"}))
@@ -546,7 +561,7 @@ async def _assemblyai_transcribe_async(
                         transcript_parts.append(text)
                 elif msg_type == "Termination":
                     break
-        except websockets.exceptions.ConnectionClosedOK:
+        except websockets.exceptions.ConnectionClosed:
             pass
         finally:
             send_task.cancel()
@@ -751,7 +766,7 @@ def run_benchmark(
         except Exception as exc:
             if verbose:
                 with _PRINT_LOCK:
-                    print(f"  [{lang}] {title[:45]:<45} ERROR — {exc}")
+                    print(f"  [{label}][{lang}] {title[:45]:<45} ERROR — {exc}")
             return {
                 "lang":       lang,
                 "title":      title,
