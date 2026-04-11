@@ -301,14 +301,16 @@ def compute_word_metrics(
     """
     norm_ref = normalize_text(reference, lang)
     norm_hyp = normalize_text(hypothesis, lang)
-    measures = jiwer.compute_measures(norm_ref, norm_hyp)
-    hits = measures["hits"]
-    subs = measures["substitutions"]
-    dels = measures["deletions"]
-    ins  = measures["insertions"]
-    recall   = hits / (hits + subs + dels) if (hits + subs + dels) > 0 else 0.0
-    accuracy = hits / (hits + subs + ins)  if (hits + subs + ins)  > 0 else 0.0
-    return {"wer": measures["wer"], "recall": recall, "accuracy": accuracy}
+    output = jiwer.process_words(norm_ref, norm_hyp)
+    hits = output.hits
+    subs = output.substitutions
+    dels = output.deletions
+    ins  = output.insertions
+    n    = hits + subs + dels  # total reference words
+    wer      = (subs + dels + ins) / n if n > 0 else 0.0
+    recall   = hits / n                if n > 0 else 0.0
+    accuracy = hits / (hits + subs + ins) if (hits + subs + ins) > 0 else 0.0
+    return {"wer": wer, "recall": recall, "accuracy": accuracy}
 
 
 def compute_llm_score(
@@ -316,20 +318,25 @@ def compute_llm_score(
 ) -> float:
     """Use Claude Sonnet as a judge to score transcription quality 1–5.
 
-    5 = perfect transcription, 1 = completely unusable.
+    8 = perfect transcription, 1 = completely unusable.
     Returns float("nan") on any error.
     """
     prompt = (
         "You are evaluating the quality of a speech transcription.\n\n"
-        f"Ground truth:\n{reference}\n\n"
-        f"Transcription:\n{hypothesis}\n\n"
-        "Rate the transcription quality on a scale from 1 to 5:\n"
-        "5 = Perfect transcription\n"
-        "4 = Very good, minor errors\n"
-        "3 = Acceptable, some errors but understandable\n"
-        "2 = Poor, significant errors\n"
-        "1 = Completely unusable\n\n"
-        "Respond with only a single integer (1-5)."
+        
+        "Rate the transcription quality on a scale from 1 to 8:\n"
+        "8 = Perfect transcription. There are no errors and the transcription matches the ground truth perfectly.\n"
+        "7 = Nearly Perfect transcription. There may be minor inconsistencies in spelling or formatting but a human would be able to understand the full meaning of every part of the transcription perfectly.\n"
+        "6 = Very Good transcription. Some words in the transcription may differ, but a human would be able to understand the general content of each part of the transcription .\n"
+         "5 = Good transcription. Many words in the transcription may differ, but a human would be able to understand the general content of most parts of the transcription .\n"
+        "4 = Fair. A human may be able to understand the content of most sections, but many sections are garbled and difficult to understand.\n"
+        "3 = Poor. A human may be able to guess at the general subject of the transcription based on some of the words, and they may be able to understand the content of some sections, but most sections are garbled and impossible to understand.\n"
+        "2 = Very Poor. A human may be able to guess at the general subject of the transcription based on some of the words, but would not be able to understand any of the points the speaker is trying to convey.\n"
+        "1 = Completely unusable. No or very few words match between the ground truth and transcription. Words do not follow grammatical structure.\n\n"
+        "Respond with only a single integer (1-8)."
+
+        f"Ground truth: ```\n{reference}\n```\n"
+        f"Transcription: ```\n{hypothesis}\n```\n"
     )
     try:
         response = anthropic.Anthropic().messages.create(
@@ -488,6 +495,12 @@ def transcribe_gladia(
 #   "universal-streaming-english"       — Universal-2, English only
 #   "u3-rt-pro"                         — Universal-3 Pro (highest accuracy, fewer languages)
 #   "whisper-rt"                        — Whisper real-time
+#
+# u3-rt-pro only supports a subset of languages; passing an unsupported language_code
+# causes a 1011 internal error.  language_code is silently dropped when the lang is
+# not in _AAI_U3_PRO_LANGS.
+_AAI_U3_PRO_LANGS = {"en", "es", "fr", "de", "pt", "it", "nl", "no", "sv", "da",
+                     "fi", "pl", "ru", "uk", "ko", "ja", "zh", "hi", "tr"}
 
 import urllib.parse as _urlparse
 
@@ -566,12 +579,17 @@ def transcribe_assemblyai(
     Returns:
         Full transcript as a single string.
     """
+    lang_code = LANG_CODES[lang] if language_hint else None
+    # u3-rt-pro only handles a subset of languages; drop the hint for others to
+    # avoid a 1011 internal error from the AssemblyAI server.
+    if lang_code and speech_model == "u3-rt-pro" and lang_code not in _AAI_U3_PRO_LANGS:
+        lang_code = None
     return _run_async(
         _assemblyai_transcribe_async(
             audio_path,
             keyterms=keyterms,
             speech_model=speech_model,
-            language=LANG_CODES[lang] if language_hint else None,
+            language=lang_code,
         )
     )
 
@@ -606,13 +624,26 @@ def transcribe_whisper(
         )
 
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    lang_code = LANG_CODES[lang]
     with open(audio_path, "rb") as f:
-        result = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-            language=LANG_CODES[lang],
-            response_format="text",
-        )
+        try:
+            result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                language=lang_code,
+                response_format="text",
+            )
+        except openai.BadRequestError as exc:
+            if "unsupported_language" in str(exc):
+                # Fall back to auto-detection for languages Whisper doesn't support
+                f.seek(0)
+                result = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    response_format="text",
+                )
+            else:
+                raise
     return result
 
 
