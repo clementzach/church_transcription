@@ -63,6 +63,7 @@ def main():
         langs=args.langs,
         max_workers=args.workers,
     )
+    
 
     # Print scores for each strategy
     for label, df in sorted(results.items()):
@@ -74,6 +75,7 @@ def main():
     print(f"{'=' * 66}")
     frames = []
     for label, df in sorted(results.items()):
+        df.to_csv(f"results/{label}_all_results.csv")
         valid = df.dropna(subset=["wer"])
         agg = valid.groupby("lang")["wer"].mean().rename(label)
         frames.append(agg)
