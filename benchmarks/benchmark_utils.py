@@ -317,14 +317,14 @@ def compute_word_metrics(
 def compute_llm_score(
     hypothesis: str, reference: str, lang: Optional[str] = None
 ) -> float:
-    """Use Claude Sonnet as a judge to score transcription quality 1–5.
+    """Use Claude Sonnet as a judge to score transcription quality 1–8.
 
     8 = perfect transcription, 1 = completely unusable.
     Returns float("nan") on any error.
     """
     prompt = (
         "You are evaluating the quality of a speech transcription. Note that the ground truth text may contain additional footnotes or reference not spoken in the transcription. You may ignore those while making your evaluation.\n\n"
-        
+
         "Rate the transcription quality on a scale from 1 to 8:\n"
         "8 = Perfect transcription. There are no errors and the transcription matches the ground truth perfectly besides any footnotes existing in the ground truth.\n"
         "7 = Nearly Perfect transcription. There may be minor inconsistencies in spelling or formatting but a human would be able to understand the full meaning of every part of the transcription perfectly.\n"
@@ -340,7 +340,7 @@ def compute_llm_score(
         "Correct example responses are:\n```5```\n```1```\n```3``` . \n"
     )
     try:
-        time.sleep(60)
+        time.sleep(90)
         response = anthropic.Anthropic().messages.create(
             model="claude-sonnet-4-6",
             max_tokens=16,
