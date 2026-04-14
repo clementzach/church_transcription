@@ -634,22 +634,6 @@
 // ── Constants ──────────────────────────────────────────────────────────────
 const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
 const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
-const GLADIA_CONFIG_BASE = {
-  encoding: 'wav/pcm',
-  sample_rate: 16000,
-  bit_depth: 16,
-  channels: 1,
-  realtime_processing: {
-    translation: true,
-    translation_config: {
-      model: 'enhanced',
-      lipsync: false,
-      match_original_utterances: false,
-      context_adaptation: true,
-      context: 'This is a Latter-day Saint (LDS/Mormon) church service. Speakers may reference LDS-specific scripture, theology, and organizational terms. Preserve proper nouns exactly as spoken.'
-    }
-  },
-};
 
 // ── State ──────────────────────────────────────────────────────────────────
 let selectedLang = 'auto';
@@ -668,6 +652,10 @@ let reconnectTimer = null;
 const history = { en: [], es: [], ht: [], pt: [], zh: [], fr: [] };
 // Current partial text per panel (only source panel uses it)
 const partials = { en: '', es: '', ht: '', pt: '', zh: '', fr: '' };
+// Flat chunk queues per panel — new utterances append; drain at CHUNK_DELAY_MS
+const pendingChunks = Object.fromEntries(ALL_LANGS.map(l => [l, []]));
+const chunkTimers   = Object.fromEntries(ALL_LANGS.map(l => [l, null]));
+const CHUNK_DELAY_MS = 1200;
 
 // ── UI refs ────────────────────────────────────────────────────────────────
 const startBtn      = document.getElementById('start-btn');
@@ -757,11 +745,46 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// Split text into chunks of at most CHUNK_MAX_CHARS characters, breaking at
+// word boundaries.  Prevents long utterances from overflowing caption panels.
+const CHUNK_MAX_CHARS = 60;
+
+function chunkText(text) {
+  if (text.length <= CHUNK_MAX_CHARS) return [text];
+  const words = text.split(/\s+/);
+  const chunks = [];
+  let cur = '';
+  for (const w of words) {
+    if (!cur) {
+      cur = w;
+    } else if (cur.length + 1 + w.length <= CHUNK_MAX_CHARS) {
+      cur += ' ' + w;
+    } else {
+      chunks.push(cur);
+      cur = w;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
 function commitLine(lang, text) {
   if (!text || !text.trim()) return;
-  history[lang].push(text.trim());
-  if (history[lang].length > 3) history[lang].shift();
   partials[lang] = '';
+  // Append all chunks to the flat queue; start draining only if idle.
+  chunkText(text.trim()).forEach(c => pendingChunks[lang].push(c));
+  if (chunkTimers[lang] === null) processNextChunk(lang);
+}
+
+function processNextChunk(lang) {
+  if (pendingChunks[lang].length === 0) { chunkTimers[lang] = null; return; }
+  pushChunk(lang, pendingChunks[lang].shift());
+  chunkTimers[lang] = setTimeout(() => processNextChunk(lang), CHUNK_DELAY_MS);
+}
+
+function pushChunk(lang, chunk) {
+  history[lang].push(chunk);
+  if (history[lang].length > 3) history[lang].shift();
   renderPanel(lang);
 }
 
@@ -776,6 +799,8 @@ function setPartial(lang, text) {
 function clearPanels() {
   detectedSourceLang = 'en';
   ALL_LANGS.forEach(l => {
+    if (chunkTimers[l] !== null) { clearTimeout(chunkTimers[l]); chunkTimers[l] = null; }
+    pendingChunks[l] = [];
     history[l] = [];
     partials[l] = '';
     renderPanel(l);
@@ -789,34 +814,20 @@ async function startSession() {
 
   clearReconnectTimer();
 
-  // Build config
-  const config = JSON.parse(JSON.stringify(GLADIA_CONFIG_BASE));
-  if (selectedLang === 'auto') {
-    config.language_config = { languages: ALL_LANGS.slice(), code_switching: true };
-    config.realtime_processing.translation_config.target_languages = ALL_LANGS.slice();
-  } else {
-    config.language_config = { languages: [selectedLang], code_switching: false };
-    config.realtime_processing.translation_config.target_languages = ALL_LANGS.filter(l => l !== selectedLang);
-  }
-
-  // Init session with Gladia
-  let gladiaWsUrl;
+  // Init session — backend builds the Gladia config and stores the URL.
   try {
     const resp = await fetch('/church_transcription/init-session', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(config)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: selectedLang }),
     });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(`Init session failed (${resp.status}): ${text}`);
     }
     const data = await resp.json();
-    gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
-    if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
     if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; qrBtn.disabled = false; }
+    if (!currentSessionId) throw new Error('No session_id in response: ' + JSON.stringify(data));
   } catch (err) {
     alert('Failed to start session: ' + err.message);
     return;
@@ -843,7 +854,7 @@ async function startSession() {
 
   ws.addEventListener('open', async () => {
     console.log('[ws] Backend WebSocket open');
-    ws.send(JSON.stringify({ url: gladiaWsUrl, session_id: currentSessionId }));
+    ws.send(JSON.stringify({ session_id: currentSessionId }));
     await startAudio();
   });
 

@@ -549,6 +549,8 @@ const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh:
 let selectedLang = null;
 let ws = null;
 const history = [];       // committed lines, max 3
+let pendingChunks = [];   // flat queue — new utterances append; drains at CHUNK_DELAY_MS
+let chunkTimer = null;
 
 // Audio streaming via AudioContext
 let audioCtx = null;
@@ -676,6 +678,32 @@ function showListenerScreen(sessionId) {
 }
 
 // ── Caption display ────────────────────────────────────────────────────────
+// Split text into chunks of at most CHUNK_MAX_CHARS characters, breaking at
+// word boundaries.  This prevents long utterances from overflowing the panel
+// and showing only the last few words.
+const CHUNK_MAX_CHARS = 60;
+
+function chunkText(text) {
+  if (text.length <= CHUNK_MAX_CHARS) return [text];
+  const words = text.split(/\s+/);
+  const chunks = [];
+  let cur = '';
+  for (const w of words) {
+    if (!cur) {
+      cur = w;
+    } else if (cur.length + 1 + w.length <= CHUNK_MAX_CHARS) {
+      cur += ' ' + w;
+    } else {
+      chunks.push(cur);
+      cur = w;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+const CHUNK_DELAY_MS = 1200; // time each chunk stays as the "current" line before next appears
+
 function commitLine(text) {
   if (!text || !text.trim()) return;
 
@@ -684,7 +712,19 @@ function commitLine(text) {
     showListenerScreen(sessionInput.value);
   }
 
-  history.push(text.trim());
+  // Append all chunks to the flat queue; start draining only if idle.
+  chunkText(text.trim()).forEach(c => pendingChunks.push(c));
+  if (chunkTimer === null) processNextChunk();
+}
+
+function processNextChunk() {
+  if (pendingChunks.length === 0) { chunkTimer = null; return; }
+  pushChunk(pendingChunks.shift());
+  chunkTimer = setTimeout(processNextChunk, CHUNK_DELAY_MS);
+}
+
+function pushChunk(chunk) {
+  history.push(chunk);
   if (history.length > 3) history.shift();
   renderLines();
 }

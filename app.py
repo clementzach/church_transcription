@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -38,7 +39,31 @@ _tts_client = _texttospeech.TextToSpeechClient(
     credentials=_google_api_key.Credentials(os.getenv("GOOGLE_API_KEY"))
 )
 
-TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
+ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
+TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
+
+# Gladia live-session config — kept server-side so the browser never needs to
+# know about Gladia's API surface.
+GLADIA_CONFIG_BASE = {
+    'encoding': 'wav/pcm',
+    'sample_rate': 16000,
+    'bit_depth': 16,
+    'channels': 1,
+    'realtime_processing': {
+        'translation': True,
+        'translation_config': {
+            'model': 'enhanced',
+            'lipsync': False,
+            'match_original_utterances': False,
+            'context_adaptation': True,
+            'context': (
+                'This is a Latter-day Saint (LDS/Mormon) church service. '
+                'Speakers may reference LDS-specific scripture, theology, and '
+                'organizational terms. Preserve proper nouns exactly as spoken.'
+            ),
+        },
+    },
+}
 
 # ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
 OPENAI_TTS_VOICES = {
@@ -267,8 +292,22 @@ async def listen():
 
 @app.post("/init-session")
 async def init_session(request: Request):
-    config = await request.json()
-    log.info("init-session called, config=%s", json.dumps(config))
+    body = await request.json()
+    src_lang = body.get('language', 'auto')
+    log.info("init-session called, language=%s", src_lang)
+
+    # Build the Gladia config server-side.
+    config = copy.deepcopy(GLADIA_CONFIG_BASE)
+    if src_lang == 'auto':
+        config['language_config'] = {'languages': ALL_LANGS[:], 'code_switching': True}
+        config['realtime_processing']['translation_config']['target_languages'] = ALL_LANGS[:]
+    else:
+        config['language_config'] = {'languages': [src_lang], 'code_switching': False}
+        config['realtime_processing']['translation_config']['target_languages'] = [
+            l for l in ALL_LANGS if l != src_lang
+        ]
+
+    log.info("Gladia config: %s", json.dumps(config))
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://api.gladia.io/v2/live",
@@ -281,11 +320,15 @@ async def init_session(request: Request):
         )
     log.info("Gladia /v2/live response: status=%d", resp.status_code)
     if resp.is_success:
+        data = resp.json()
+        gladia_url = data.get('url') or data.get('websocket_url') or data.get('ws_url', '')
+
         session_id = _generate_session_id()
         timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
         timer.daemon = True
         session = {
             'start_time': time.time(),
+            'gladia_url': gladia_url,
             'listener_registry': {lang: [] for lang in TRANSLATION_LANGS},
             'tts_queues': {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS},
             'timer': timer,
@@ -299,11 +342,9 @@ async def init_session(request: Request):
             ).start()
         timer.start()
 
-        data = resp.json()
-        data['session_id'] = session_id
         log.info("Session created: id=%s timeout=%ds gladia_url=%s",
-                 session_id, SESSION_TIMEOUT_SECS, data.get('url') or data.get('websocket_url'))
-        return data
+                 session_id, SESSION_TIMEOUT_SECS, gladia_url)
+        return {'session_id': session_id}
     log.error("Gladia init failed: %d %s", resp.status_code, resp.text)
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -312,7 +353,7 @@ async def init_session(request: Request):
 async def stream(ws: WebSocket):
     await ws.accept()
 
-    # First message from browser: JSON with Gladia URL and session_id.
+    # First message from browser: JSON with session_id only.
     try:
         raw_first = await ws.receive_text()
     except WebSocketDisconnect:
@@ -320,15 +361,9 @@ async def stream(ws: WebSocket):
 
     try:
         first_msg = json.loads(raw_first)
-        gladia_url = first_msg.get('url', '')
         session_id = first_msg.get('session_id', '')
     except Exception as e:
         log.error("stream: failed to parse first message: %s", e)
-        await ws.close()
-        return
-
-    if not gladia_url or not gladia_url.startswith("wss://"):
-        log.error("stream: invalid or missing Gladia URL: %r", gladia_url)
         await ws.close()
         return
 
@@ -338,10 +373,17 @@ async def stream(ws: WebSocket):
         return
 
     with _lock:
-        if session_id not in sessions:
-            log.error("stream: unknown session_id=%s", session_id)
-            await ws.close()
-            return
+        session = sessions.get(session_id)
+    if not session:
+        log.error("stream: unknown session_id=%s", session_id)
+        await ws.close()
+        return
+
+    gladia_url = session.get('gladia_url', '')
+    if not gladia_url or not gladia_url.startswith("wss://"):
+        log.error("stream: invalid or missing Gladia URL in session: %r", gladia_url)
+        await ws.close()
+        return
 
     log.info("stream: session=%s connecting to Gladia at %s", session_id, gladia_url)
     audio_chunks = 0
