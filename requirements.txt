@@ -11,3 +11,10 @@ anthropic
 pydub
 faster-whisper
 numpy
+torch
+transformers
+datasets
+evaluate
+jiwer
+accelerate
+tensorboard

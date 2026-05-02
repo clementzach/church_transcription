@@ -1,18 +1,24 @@
+import io
 import json
 import logging
+import os
 import re
 import time
 import unicodedata
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env")  # root .env (GOOGLE_API_KEY etc.)
+load_dotenv(Path(__file__).parent / ".env")  # fine_tuning/.env overrides
 
 import numpy as np
 from faster_whisper import WhisperModel
+from google import genai as google_genai
+from google.genai import types as google_types
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
 
@@ -32,7 +38,7 @@ SILENCE_MIN_LEN_MS = 500
 SILENCE_THRESH_DBFS = -40
 MIN_CHUNK_MS = 300
 MAX_SEGMENT_MS = 30_000
-WINDOW_SIZE = 3
+WINDOW_SIZE = 4
 LANG_NAME = "Haitian Creole"
 WHISPER_MODEL_SIZE = "large-v3"
 WHISPER_DEVICE = "cuda"
@@ -40,8 +46,11 @@ WHISPER_COMPUTE_TYPE = "float16"
 WHISPER_LANG = "ht"
 API_MAX_RETRIES = 3
 API_RETRY_DELAY = 2.0
+GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+GEMINI_TTS_VOICE = "Kore"  # same voice used for 'ht' in app.py
 
 _whisper_model: WhisperModel | None = None
+_google_client: google_genai.Client | None = None
 
 
 def _get_whisper_model() -> WhisperModel:
@@ -49,6 +58,54 @@ def _get_whisper_model() -> WhisperModel:
     if _whisper_model is None:
         _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
     return _whisper_model
+
+
+def _get_google_client() -> google_genai.Client:
+    global _google_client
+    if _google_client is None:
+        _google_client = google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    return _google_client
+
+
+def synthesize_tts_audio(text: str) -> AudioSegment | None:
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            client = _get_google_client()
+            response = client.models.generate_content(
+                model=GEMINI_TTS_MODEL,
+                contents=text,
+                config=google_types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=google_types.SpeechConfig(
+                        voice_config=google_types.VoiceConfig(
+                            prebuilt_voice_config=google_types.PrebuiltVoiceConfig(
+                                voice_name=GEMINI_TTS_VOICE,
+                            )
+                        ),
+                    ),
+                ),
+            )
+            pcm_data = response.candidates[0].content.parts[0].inline_data.data
+            wav_bytes = _pcm_to_wav(pcm_data)
+            return AudioSegment.from_wav(io.BytesIO(wav_bytes))
+        except Exception as e:
+            if attempt < API_MAX_RETRIES - 1:
+                sleep_s = (2 ** attempt) * API_RETRY_DELAY
+                logger.warning("TTS error %s, retrying in %.1fs", e, sleep_s)
+                time.sleep(sleep_s)
+            else:
+                logger.error("TTS synthesis failed after %d retries: %s", API_MAX_RETRIES, e)
+    return None
+
+
+def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, sample_width: int = 2) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+    return buf.getvalue()
 
 
 @dataclass
@@ -145,55 +202,73 @@ def parse_paragraphs(txt_path: Path) -> list[str]:
     return [p for p in paragraphs if p]
 
 
-def advance_window(matched_text: str, paragraphs: list[str], window_start: int) -> int:
+def _normalize(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s).encode("ascii", errors="ignore").decode()
+    s = re.sub(r"[^a-z ]", "", s.lower())
+    return " ".join(s.split())
+
+
+def _find_in_window(
+    matched_text: str, paragraphs: list[str], window_start: int
+) -> tuple[int, int] | None:
+    """Case/whitespace-insensitive exact match within the current window.
+
+    Returns (new_window_start, para_idx), or None if not found.
+
+    The window advances only when the match is beyond the first paragraph,
+    which tells us the first paragraph is no longer relevant. The matched
+    paragraph itself becomes the new first paragraph (anchor) on the next call.
+    """
     window_end = min(window_start + WINDOW_SIZE, len(paragraphs))
-    needle = matched_text.strip()
+    needle = _normalize(matched_text)
 
     for i in range(window_start, window_end):
-        if needle in paragraphs[i]:
-            return min(i + 1, len(paragraphs))
+        if needle in _normalize(paragraphs[i]):
+            # Only slide window_start forward when we've confirmed paragraph
+            # window_start is behind us (i.e. the match is in a later paragraph).
+            new_start = i if i > window_start else window_start
+            return (new_start, i)
 
-    # Token overlap fallback
-    matched_tokens = set(needle.lower().split())
-    if not matched_tokens:
-        return window_start
-
-    best_i, best_score = window_start, 0.0
-    for i in range(window_start, window_end):
-        para_tokens = set(paragraphs[i].lower().split())
-        union = matched_tokens | para_tokens
-        score = len(matched_tokens & para_tokens) / len(union) if union else 0.0
-        if score > best_score:
-            best_score, best_i = score, i
-
-    return min(best_i + 1, len(paragraphs))
+    return None
 
 
 def align_utterance_to_text(
     whisper_text: str,
     paragraphs: list[str],
     window_start: int,
-) -> tuple[str, int]:
+) -> tuple[str, int, int]:
+    """Returns (matched_text, new_window_start, matched_paragraph_index).
+
+    matched_paragraph_index is -1 when no match is found.
+    Claude is called at most twice: if the first response doesn't produce an
+    exact match in the window, one retry is attempted before giving up.
+    """
     if window_start >= len(paragraphs):
-        return ("", window_start)
+        return ("", window_start, -1)
     if not whisper_text.strip():
-        return ("", window_start)
+        return ("", window_start, -1)
 
     ipa = _call_with_retry(get_ipa_string, LANG_NAME, whisper_text)
     if not ipa:
-        return ("", window_start)
+        return ("", window_start, -1)
 
     window_text = "\n\n".join(paragraphs[window_start: window_start + WINDOW_SIZE])
-    result = _call_with_retry(
-        identify_phonetic_component_within_text, LANG_NAME, ipa, window_text
-    )
-    result = result.strip().strip("`")
 
-    if result == "---UNMATCHED---":
-        return ("", window_start)
+    for _ in range(2):
+        result = _call_with_retry(
+            identify_phonetic_component_within_text, LANG_NAME, ipa, window_text
+        )
+        result = result.strip().strip("`")
 
-    new_start = advance_window(result, paragraphs, window_start)
-    return (result, new_start)
+        if "unmatched" in result.lower():
+            return ("", window_start, -1)
+
+        match = _find_in_window(result, paragraphs, window_start)
+        if match is not None:
+            new_start, para_idx = match
+            return (result, new_start, para_idx)
+
+    return ("", window_start, -1)
 
 
 def _finalize_segment(utterances: list[Utterance]) -> tuple[AudioSegment, str]:
@@ -215,15 +290,14 @@ def stitch_segments(utterances: list[Utterance]) -> list[tuple[AudioSegment, str
                 current = []
             continue
 
-        current_total = sum(x.duration_ms for x in current)
-        if current_total + u.duration_ms <= MAX_SEGMENT_MS:
-            current.append(u)
-        else:
-            if current:
-                output.append(_finalize_segment(current))
-            current = current[1:] + [u]
-            while len(current) > 1 and sum(x.duration_ms for x in current) > MAX_SEGMENT_MS:
-                current = current[1:]
+        current.append(u)
+
+        # When the window overflows, emit everything except the newest utterance,
+        # then slide forward by dropping the oldest — producing overlapping segments
+        # (e.g. ABC → BCD → CDE).
+        while sum(x.duration_ms for x in current) > MAX_SEGMENT_MS and len(current) > 1:
+            output.append(_finalize_segment(current[:-1]))
+            current = current[1:]
 
     if current:
         output.append(_finalize_segment(current))
@@ -238,6 +312,12 @@ def slugify(name: str) -> str:
     return slug[:60]
 
 
+def _talk_segment_prefix(pair: TalkPair) -> str:
+    year_num = pair.year.replace("y_", "")
+    month_num = pair.month.replace("m_", "")
+    return f"seg_{year_num}_{month_num}_{slugify(pair.stem)}_"
+
+
 def export_segment(
     audio: AudioSegment,
     text: str,
@@ -245,52 +325,51 @@ def export_segment(
     seg_index: int,
     metadata_handle,
     data_dir: Path = DATA_DIR,
+    synthetic: bool = False,
 ) -> None:
     resampled = audio.set_frame_rate(16_000).set_channels(1).set_sample_width(2)
-    year_num = pair.year.replace("y_", "")
-    month_num = pair.month.replace("m_", "")
-    slug = slugify(pair.stem)
-    filename = f"seg_{year_num}_{month_num}_{slug}_{seg_index:05d}.wav"
+    filename = f"{_talk_segment_prefix(pair)}{seg_index:05d}.wav"
     wav_path = data_dir / filename
     resampled.export(wav_path, format="wav")
 
-    record = {"file_name": f"data/{filename}", "transcription": text}
+    record = {"file_name": f"data/{filename}", "transcription": text, "synthetic": synthetic}
     metadata_handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     metadata_handle.flush()
 
 
 def _talk_already_processed(pair: TalkPair, data_dir: Path) -> bool:
-    year_num = pair.year.replace("y_", "")
-    month_num = pair.month.replace("m_", "")
-    slug = slugify(pair.stem)
-    prefix = f"seg_{year_num}_{month_num}_{slug}_"
-    return any(data_dir.glob(f"{prefix}*.wav"))
+    return any(data_dir.glob(f"{_talk_segment_prefix(pair)}*.wav"))
 
 
-def process_talk(pair: TalkPair, seg_counter: list[int], metadata_handle, data_dir: Path = DATA_DIR) -> int:
+def process_talk(
+    pair: TalkPair, seg_counter: list[int], metadata_handle, data_dir: Path = DATA_DIR
+) -> tuple[int, int]:
+    """Returns (n_real_segments, n_tts_segments)."""
     logger.info("Processing %s/%s/%s", pair.year, pair.month, pair.stem)
 
     chunks = chunk_audio_on_silence(pair.mp3_path)
     if not chunks:
         logger.warning("No audio chunks for %s", pair.stem)
-        return 0
+        return (0, 0)
 
     paragraphs = parse_paragraphs(pair.txt_path)
     if not paragraphs:
         logger.warning("No paragraphs for %s", pair.stem)
-        return 0
+        return (0, 0)
 
     utterances: list[Utterance] = []
     window_start = 0
+    matched_para_indices: set[int] = set()
 
     for i, chunk in enumerate(chunks):
         whisper_text = transcribe_chunk(chunk)
-        matched_text, new_window_start = align_utterance_to_text(
+        matched_text, new_window_start, para_idx = align_utterance_to_text(
             whisper_text, paragraphs, window_start
         )
         is_matched = bool(matched_text)
         if is_matched:
             window_start = new_window_start
+            matched_para_indices.add(para_idx)
             logger.debug("Chunk %d matched: %s", i, matched_text[:60])
         else:
             logger.debug("Chunk %d unmatched (whisper: %s)", i, whisper_text[:40])
@@ -305,15 +384,33 @@ def process_talk(pair: TalkPair, seg_counter: list[int], metadata_handle, data_d
 
     segments = stitch_segments(utterances)
     for audio, text in segments:
-        export_segment(audio, text, pair, seg_counter[0], metadata_handle, data_dir)
+        export_segment(audio, text, pair, seg_counter[0], metadata_handle, data_dir, synthetic=False)
         seg_counter[0] += 1
 
-    matched_count = sum(1 for u in utterances if u.is_matched)
+    tts_count = 0
+    n_unmatched = len(paragraphs) - len(matched_para_indices)
+    for para_idx, para in enumerate(paragraphs):
+        if para_idx not in matched_para_indices:
+            logger.debug("Generating TTS for unmatched paragraph %d: %.60s", para_idx, para)
+            tts_audio = synthesize_tts_audio(para)
+            if tts_audio is not None:
+                export_segment(tts_audio, para, pair, seg_counter[0], metadata_handle, data_dir, synthetic=True)
+                seg_counter[0] += 1
+                tts_count += 1
+
+    n_real = len(segments)
+    n_total_paras = len(paragraphs)
+    n_matched_paras = len(matched_para_indices)
+    pct_synthetic = 100.0 * n_unmatched / n_total_paras if n_total_paras else 0.0
     logger.info(
-        "Talk %s: %d chunks, %d matched, %d segments written",
-        pair.stem, len(chunks), matched_count, len(segments),
+        "Talk %s: %d/%d paragraphs matched to real audio, %d/%d needed TTS (%.1f%% synthetic) "
+        "→ %d real segments, %d TTS segments",
+        pair.stem,
+        n_matched_paras, n_total_paras,
+        n_unmatched, n_total_paras, pct_synthetic,
+        n_real, tts_count,
     )
-    return len(segments)
+    return (n_real, tts_count)
 
 
 def run_pipeline(
@@ -330,8 +427,9 @@ def run_pipeline(
     if limit is not None:
         pairs = pairs[:limit]
 
-    seg_counter = [0]
-    total_segments = 0
+    seg_counter = [sum(1 for _ in data_dir.glob("*.wav"))]
+    total_real = 0
+    total_tts = 0
 
     with open(metadata_file, "a", encoding="utf-8") as meta_f:
         for pair in pairs:
@@ -339,12 +437,18 @@ def run_pipeline(
                 logger.info("Skipping already-processed talk: %s", pair.stem)
                 continue
             try:
-                n = process_talk(pair, seg_counter, meta_f, data_dir)
-                total_segments += n
+                n_real, n_tts = process_talk(pair, seg_counter, meta_f, data_dir)
+                total_real += n_real
+                total_tts += n_tts
             except Exception as e:
                 logger.error("Failed to process %s: %s", pair.stem, e, exc_info=True)
 
-    logger.info("Pipeline complete: %d total segments written", total_segments)
+    total = total_real + total_tts
+    pct_synthetic = 100.0 * total_tts / total if total else 0.0
+    logger.info(
+        "Pipeline complete: %d real segments, %d TTS segments, %d total (%.1f%% synthetic)",
+        total_real, total_tts, total, pct_synthetic,
+    )
 
 
 if __name__ == "__main__":

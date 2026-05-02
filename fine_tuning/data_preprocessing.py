@@ -26,7 +26,7 @@ If words appear in other langages, include the phonetic transcriptions of those 
 
 Each chunk should contain only one syllable. If there are multi-syllable words, break each one up and put another " | " delimiter between them.
 
-Do not include any explanation or surrounding text.Do not include any explanation or surrounding text.
+Do not include any explanation or surrounding text.
 
 Example input: ```I acknowledged that I made a mistake and asked for forgiveness```
 Example output: ```aɪ | æk | nɒl | ɪdʒd | ðæt | aɪ | meɪd | ə | mɪs | teɪk | ænd | æskt | fər | fər | ɡɪv | nəs```
