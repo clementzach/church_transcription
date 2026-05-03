@@ -768,15 +768,27 @@ updateStartBtn();
 
 // ── Language toggle ────────────────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     const lang = btn.dataset.lang;
     if (lang === selectedLang) return;
     selectedLang = lang;
     document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
 
     if (isRunning) {
-      // Silent reconnect
-      stopSession(false).then(() => startSession());
+      const sid = currentSessionId;
+      currentSessionId = null; // clear so startSession always calls init-session
+      await stopSession(false);
+      // Explicitly end the backend session so init-session won't see an active broadcaster.
+      if (sid) {
+        try {
+          await fetch('/church_transcription/end-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sid }),
+          });
+        } catch (_) {}
+      }
+      startSession();
     }
   });
 });
@@ -913,35 +925,32 @@ async function startSession() {
 
   clearReconnectTimer();
 
-  // Only init a new Gladia session when we don't already have one (reconnect skips this).
-  if (!currentSessionId) {
-    const code = sessionCodeInput.value.trim();
-    if (code.length !== 6) return;
+  const code = sessionCodeInput.value.trim();
+  if (code.length !== 6) return;
 
-    try {
-      const resp = await fetch('/church_transcription/init-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ language: selectedLang, session_id: code }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        sessionCodeInput.classList.add('error');
-        alert(data.error || `Failed to start session (${resp.status})`);
-        return;
-      }
-      currentSessionId = data.session_id;
-    } catch (err) {
-      alert('Failed to start session: ' + err.message);
+  try {
+    const resp = await fetch('/church_transcription/init-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: selectedLang, session_id: code }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      sessionCodeInput.classList.add('error');
+      alert(data.error || `Failed to start session (${resp.status})`);
       return;
     }
-
-    sessionIdEl.textContent = currentSessionId;
-    sessionCodeInput.style.display = 'none';
-    sessionIdEl.style.display = '';
-    copySessionBtn.disabled = false;
-    qrBtn.disabled = false;
+    currentSessionId = data.session_id;
+  } catch (err) {
+    alert('Failed to start session: ' + err.message);
+    return;
   }
+
+  sessionIdEl.textContent = currentSessionId;
+  sessionCodeInput.style.display = 'none';
+  sessionIdEl.style.display = '';
+  copySessionBtn.disabled = false;
+  qrBtn.disabled = false;
 
   // Get mic
   try {
