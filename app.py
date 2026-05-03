@@ -154,6 +154,20 @@ def _broadcast(session_id, lang, message):
             pass
 
 
+def _teardown_session(session, reason='Session ended'):
+    """Cancel the session timer, stop TTS workers, and notify all listeners."""
+    session['timer'].cancel()
+    error_msg = json.dumps({'type': 'error', 'message': reason})
+    for lang in ALL_LANGS:
+        _force_put(session['tts_queues'][lang], None)
+        for q in list(session['listener_registry'].get(lang, [])):
+            try:
+                _loop.call_soon_threadsafe(q.put_nowait, error_msg)
+                _loop.call_soon_threadsafe(q.put_nowait, None)
+            except Exception:
+                pass
+
+
 def _expire_session(session_id):
     """Called by the session timer after SESSION_TIMEOUT_SECS."""
     log.info("Session %s timed out after %ds", session_id, SESSION_TIMEOUT_SECS)
@@ -161,19 +175,7 @@ def _expire_session(session_id):
         session = sessions.pop(session_id, None)
     if session is None:
         return
-
-    error_msg = json.dumps({'type': 'error', 'message': 'Session expired (2-hour limit reached)'})
-    for lang in ALL_LANGS:
-        # Signal TTS worker to shut down.
-        _force_put(session['tts_queues'][lang], None)
-        # Notify listeners: send error then close sentinel.
-        for q in list(session['listener_registry'].get(lang, [])):
-            try:
-                _loop.call_soon_threadsafe(q.put_nowait, error_msg)
-                _loop.call_soon_threadsafe(q.put_nowait, None)
-            except Exception:
-                pass
-        session['listener_registry'][lang] = []
+    _teardown_session(session, 'Session expired (2-hour limit reached)')
 
 
 def _enqueue_tts(session_id, lang, text):
@@ -310,13 +312,23 @@ async def init_session(request: Request):
         )
 
     # Quick pre-check to avoid unnecessary Gladia API calls.
+    # If the session exists but no broadcaster is connected, tear it down and allow re-init
+    # (handles page refresh / accidental disconnect without requiring a different code).
+    old_session = None
     with _lock:
-        if session_id in sessions:
-            return Response(
-                content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
-                status_code=409,
-                media_type='application/json',
-            )
+        existing = sessions.get(session_id)
+        if existing is not None:
+            if existing.get('broadcaster_connected', False):
+                return Response(
+                    content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
+                    status_code=409,
+                    media_type='application/json',
+                )
+            old_session = sessions.pop(session_id)
+
+    if old_session is not None:
+        log.info("init-session: reclaiming disconnected session %s", session_id)
+        _teardown_session(old_session, 'Session replaced by broadcaster')
 
     # Build the Gladia config server-side.
     config = copy.deepcopy(GLADIA_CONFIG_BASE)
@@ -351,19 +363,28 @@ async def init_session(request: Request):
             'start_time': time.time(),
             'src_lang': src_lang,
             'gladia_url': gladia_url,
+            'broadcaster_connected': False,
             'listener_registry': {lang: [] for lang in ALL_LANGS},
             'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
             'timer': timer,
         }
-        # Atomic check-and-insert to handle concurrent requests with the same code.
+        # Atomic check-and-insert — handles concurrent requests with the same code.
+        # A connected session is always rejected; a disconnected one is replaced.
+        concurrent_old = None
         with _lock:
-            if session_id in sessions:
-                return Response(
-                    content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
-                    status_code=409,
-                    media_type='application/json',
-                )
+            existing = sessions.get(session_id)
+            if existing is not None:
+                if existing.get('broadcaster_connected', False):
+                    return Response(
+                        content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
+                        status_code=409,
+                        media_type='application/json',
+                    )
+                concurrent_old = sessions.pop(session_id)
             sessions[session_id] = session
+
+        if concurrent_old is not None:
+            _teardown_session(concurrent_old, 'Session replaced by broadcaster')
 
         for lang in ALL_LANGS:
             threading.Thread(
@@ -389,18 +410,7 @@ async def end_session(request: Request):
     if not session:
         return {'ok': True}
 
-    session['timer'].cancel()
-
-    error_msg = json.dumps({'type': 'error', 'message': 'Session ended by broadcaster'})
-    for lang in ALL_LANGS:
-        _force_put(session['tts_queues'][lang], None)
-        for q in list(session['listener_registry'].get(lang, [])):
-            try:
-                _loop.call_soon_threadsafe(q.put_nowait, error_msg)
-                _loop.call_soon_threadsafe(q.put_nowait, None)
-            except Exception:
-                pass
-
+    _teardown_session(session, 'Session ended by broadcaster')
     log.info("Session ended by broadcaster: %s", session_id)
     return {'ok': True}
 
@@ -443,6 +453,10 @@ async def stream(ws: WebSocket):
         return
 
     log.info("stream: session=%s src_lang=%s connecting to Gladia at %s", session_id, src_lang, gladia_url)
+    with _lock:
+        if sessions.get(session_id) is session:
+            session['broadcaster_connected'] = True
+
     audio_chunks = 0
     gladia_msgs = 0
     try:
@@ -535,6 +549,10 @@ async def stream(ws: WebSocket):
 
     except Exception as e:
         log.error("stream: failed to connect to Gladia: %s", e)
+    finally:
+        with _lock:
+            if sessions.get(session_id) is session:
+                session['broadcaster_connected'] = False
 
     log.info("stream: closing (audio_chunks=%d, gladia_msgs=%d)", audio_chunks, gladia_msgs)
 
