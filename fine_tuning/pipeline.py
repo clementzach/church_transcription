@@ -261,7 +261,7 @@ def align_utterance_to_text(
     if not ipa or "UNMATCHED" in ipa:
         logger.info("IPA generation failed or returned unmatched for: %.60s", whisper_text)
         return ("", window_start, -1)
-    logger.info("IPA result: %.80s", ipa)
+    logger.info("IPA result: %s", ipa)
 
     window_text = "\n\n".join(paragraphs[window_start: window_start + WINDOW_SIZE])
 
@@ -270,7 +270,7 @@ def align_utterance_to_text(
             identify_phonetic_component_within_text, LANG_NAME, ipa, window_text
         )
         result = result.strip().strip("`")
-        logger.info("Alignment result: %.120s", result)
+        logger.info("Alignment result: %s", result)
 
         if "unmatched" in result.lower():
             logger.info("No match found for: %.60s", whisper_text)
