@@ -204,7 +204,7 @@ def _call_with_retry(fn, *args, **kwargs) -> str:
 
 
 def parse_paragraphs(txt_path: Path) -> list[str]:
-    text = txt_path.read_text(encoding="utf-8")
+    text = re.sub(r"\d", "", txt_path.read_text(encoding="utf-8"))
     paragraphs = [p.strip() for p in text.split("\n\n")]
     return [p for p in paragraphs if p]
 
