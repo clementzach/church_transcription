@@ -44,13 +44,18 @@ def identify_phonetic_component_within_text(lang_name, phonetic_string, possible
 "possible_matching_string": """Mond enkonstan sa a sanble l souvan sekwe pa tanpèt, ensèten, pafwa plen chans, epi—twò souvan—pa gen chans. Poutan, nan mond tribilasyon sa a,1 nou konnen ke tout bagay ap travay ansanm pou byen moun ki renmen Bondye yo.2 Anfèt, si nou mache dwat epi nou sonje alyans nou yo, tout bagay ap travay ansanm pou byen nou."""
 }
 
+    example_input_partial_only = {
+"phonetic_string": "sak di mã ti ka ta te rã pli pu jo ʒã de te ",
+"possible_matching_string": """Non Jezikri te anba nèt e sètènman li pat an karaktè gra. Chak dimanch kat la te ranpli. Pou yon jèn detantè Prètriz Aawon ke m te ye, Sentsèn ak reyinyon Sentsèn te pran yon sans nouvo, elaji, ak espirityèl pou mwen. Mwen tap tann jou Dimanch yo ak opòtinite pou m pran Sentsèn nan avèk enpasyans paske konpreyansyon mwen sou Sakrifis Ekspyatwa Sovè a t ap transfòme mwen. Chak Dimanch, jis jounen jodi a, lè m pran Sentsèn, mwen kapab wè kat mwen an epi revize lis mwen an. Kounyeya se Sovè limanite ki toujou sou lis mwen an, anvan tout lòt bagay."""
+}
+
     current_input = {
 "phonetic_string": phonetic_string.replace(" | ", " "),
 "possible_matching_string": possible_matching_string.replace("\n", "").replace('"', '')
 }
 
     prompt = (
-f"""Your role is to take a phonetic in {lang_name} input and match it to the corresponding portion of the provided text.
+f"""Your role is to take a phonetic in {lang_name} input and match it to the corresponding portion of the provided text. Only match the portion of the provided text that matches the phonetic string exactly, even if this means only partial sentences or paragraphs are returned. Do not include any additional words in the provided text. 
 
 If it does not match anything in the provided text, write out ```---UNMATCHED---``` and no additional text.
 
@@ -59,6 +64,9 @@ Example output 1: ```Kisa Papa nou ki nan Syèl la dezire de nou menm?```
 
 Example input 2: ```{json.dumps(example_input_nomatch)}```
 Example output 2: ```---UNMATCHED---```
+
+Example input 3: ```{json.dumps(example_input_partial_only)}```
+Example output 3: ```Chak dimanch kat la te ranpli. Pou yon jèn detantè```
 
 Do not write out any context or additional output.
 
