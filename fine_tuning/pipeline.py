@@ -85,7 +85,14 @@ def synthesize_tts_audio(text: str) -> AudioSegment | None:
                     ),
                 ),
             )
-            pcm_data = response.candidates[0].content.parts[0].inline_data.data
+            candidates = response.candidates
+            if not candidates:
+                raise ValueError("Gemini TTS returned no candidates")
+            candidate = candidates[0]
+            if candidate.content is None:
+                finish_reason = getattr(candidate, 'finish_reason', 'unknown')
+                raise ValueError(f"Gemini TTS candidate has no content (finish_reason={finish_reason})")
+            pcm_data = candidate.content.parts[0].inline_data.data
             wav_bytes = _pcm_to_wav(pcm_data)
             return AudioSegment.from_wav(io.BytesIO(wav_bytes))
         except Exception as e:
