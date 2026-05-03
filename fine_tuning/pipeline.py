@@ -67,44 +67,6 @@ def _get_google_client() -> google_genai.Client:
     return _google_client
 
 
-def synthesize_tts_audio(text: str) -> AudioSegment | None:
-    for attempt in range(API_MAX_RETRIES):
-        try:
-            client = _get_google_client()
-            response = client.models.generate_content(
-                model=GEMINI_TTS_MODEL,
-                contents=text,
-                config=google_types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=google_types.SpeechConfig(
-                        voice_config=google_types.VoiceConfig(
-                            prebuilt_voice_config=google_types.PrebuiltVoiceConfig(
-                                voice_name=GEMINI_TTS_VOICE,
-                            )
-                        ),
-                    ),
-                ),
-            )
-            candidates = response.candidates
-            if not candidates:
-                raise ValueError("Gemini TTS returned no candidates")
-            candidate = candidates[0]
-            if candidate.content is None:
-                finish_reason = getattr(candidate, 'finish_reason', 'unknown')
-                raise ValueError(f"Gemini TTS candidate has no content (finish_reason={finish_reason})")
-            pcm_data = candidate.content.parts[0].inline_data.data
-            wav_bytes = _pcm_to_wav(pcm_data)
-            return AudioSegment.from_wav(io.BytesIO(wav_bytes))
-        except Exception as e:
-            if attempt < API_MAX_RETRIES - 1:
-                sleep_s = (2 ** attempt) * API_RETRY_DELAY
-                logger.warning("TTS error %s, retrying in %.1fs", e, sleep_s)
-                time.sleep(sleep_s)
-            else:
-                logger.error("TTS synthesis failed after %d retries: %s", API_MAX_RETRIES, e)
-    return None
-
-
 def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, sample_width: int = 2) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -412,25 +374,16 @@ def process_talk(
         )
         return (0, 0)
 
-    for para_idx, para in enumerate(paragraphs):
-        if para_idx not in matched_para_indices:
-            logger.debug("Generating TTS for unmatched paragraph %d: %.60s", para_idx, para)
-            tts_audio = synthesize_tts_audio(para)
-            if tts_audio is not None:
-                export_segment(tts_audio, para, pair, seg_counter[0], metadata_handle, data_dir, synthetic=True)
-                seg_counter[0] += 1
-                tts_count += 1
-
     n_real = len(segments)
     n_total_paras = len(paragraphs)
     n_matched_paras = len(matched_para_indices)
-    pct_synthetic = 100.0 * n_unmatched / n_total_paras if n_total_paras else 0.0
+    pct_unmatched = 100.0 * n_unmatched / n_total_paras if n_total_paras else 0.0
     logger.info(
-        "Talk %s: %d/%d paragraphs matched to real audio, %d/%d needed TTS (%.1f%% synthetic) "
-        "→ %d real segments, %d TTS segments",
+        "Talk %s: %d/%d paragraphs matched to real audio, %d/%d unmatched (%.1f%%) "
+        "→ %d real segments, %d unmatched",
         pair.stem,
         n_matched_paras, n_total_paras,
-        n_unmatched, n_total_paras, pct_synthetic,
+        n_unmatched, n_total_paras, pct_unmatched,
         n_real, tts_count,
     )
     return (n_real, tts_count)
@@ -466,10 +419,10 @@ def run_pipeline(
                 logger.error("Failed to process %s: %s", pair.stem, e, exc_info=True)
 
     total = total_real + total_tts
-    pct_synthetic = 100.0 * total_tts / total if total else 0.0
+    pct_unmatched = 100.0 * total_tts / total if total else 0.0
     logger.info(
-        "Pipeline complete: %d real segments, %d TTS segments, %d total (%.1f%% synthetic)",
-        total_real, total_tts, total, pct_synthetic,
+        "Pipeline complete: %d real segments, %d TTS segments, %d total (%.1f%% unmatched)",
+        total_real, total_tts, total, pct_unmatched,
     )
 
 
