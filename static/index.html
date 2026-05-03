@@ -734,6 +734,17 @@ const copySessionBtn = document.getElementById('copy-session-btn');
 const qrBtn          = document.getElementById('qr-btn');
 
 // ── Session code input ─────────────────────────────────────────────────────
+
+// Derive the stable base path (everything before any trailing 6-char code).
+// e.g. /church_transcription/CHURCH → base is /church_transcription/
+//      /church_transcription/       → base is /church_transcription/
+const _pathSegs = location.pathname.split('/').filter(s => s !== '');
+const _lastSeg  = _pathSegs[_pathSegs.length - 1] || '';
+const _hasCode  = /^[A-Z0-9]{6}$/i.test(_lastSeg);
+const BASE_PATH = _hasCode
+  ? location.pathname.slice(0, location.pathname.lastIndexOf(_lastSeg))
+  : location.pathname.replace(/\/?$/, '/');
+
 function updateStartBtn() {
   startBtn.disabled = sessionCodeInput.value.length !== 6;
 }
@@ -742,20 +753,16 @@ sessionCodeInput.addEventListener('input', () => {
   sessionCodeInput.value = sessionCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
   sessionCodeInput.classList.remove('error');
   updateStartBtn();
-  // Keep URL in sync so a refresh restores the code.
-  const url = new URL(location.href);
-  if (sessionCodeInput.value) {
-    url.searchParams.set('code', sessionCodeInput.value);
-  } else {
-    url.searchParams.delete('code');
-  }
-  history.replaceState(null, '', url);
+  // Mirror code into URL path so a page refresh restores it.
+  const newPath = sessionCodeInput.value.length === 6
+    ? BASE_PATH + sessionCodeInput.value
+    : BASE_PATH;
+  window.history.replaceState(null, '', newPath);
 });
 
-// Pre-fill from URL query param so a refresh restores the code.
-const _prefilledCode = new URLSearchParams(location.search).get('code');
-if (_prefilledCode) {
-  sessionCodeInput.value = _prefilledCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+// Pre-fill from URL path (e.g. /church_transcription/CHURCH).
+if (_hasCode) {
+  sessionCodeInput.value = _lastSeg.toUpperCase();
 }
 updateStartBtn();
 

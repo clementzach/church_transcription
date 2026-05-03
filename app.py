@@ -285,6 +285,15 @@ async def listen():
     return FileResponse("static/listen.html")
 
 
+@app.get("/{code}")
+async def index_with_code(code: str):
+    from fastapi import HTTPException
+    valid_chars = string.ascii_uppercase + string.digits
+    if len(code) == 6 and all(c in valid_chars for c in code.upper()):
+        return FileResponse("static/index.html")
+    raise HTTPException(status_code=404)
+
+
 @app.post("/init-session")
 async def init_session(request: Request):
     body = await request.json()
