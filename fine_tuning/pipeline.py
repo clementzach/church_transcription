@@ -34,9 +34,9 @@ OUTPUT_ROOT = REPO_ROOT / "fine_tuning" / "output"
 DATA_DIR = OUTPUT_ROOT / "data"
 METADATA_FILE = OUTPUT_ROOT / "metadata.jsonl"
 
-SILENCE_MIN_LEN_MS = 500
+SILENCE_MIN_LEN_MS = 800
 SILENCE_THRESH_DBFS = -40
-MIN_CHUNK_MS = 300
+MIN_CHUNK_MS = 2_000
 MAX_SEGMENT_MS = 30_000
 WINDOW_SIZE = 4
 LANG_NAME = "Haitian Creole"
@@ -251,13 +251,17 @@ def align_utterance_to_text(
     exact match in the window, one retry is attempted before giving up.
     """
     if window_start >= len(paragraphs):
+        logger.info("Skipping alignment: window_start=%d >= len(paragraphs)=%d", window_start, len(paragraphs))
         return ("", window_start, -1)
     if not whisper_text.strip():
+        logger.info("Skipping alignment: empty whisper text")
         return ("", window_start, -1)
 
     ipa = _call_with_retry(get_ipa_string, LANG_NAME, whisper_text)
-    if not ipa:
+    if not ipa or "UNMATCHED" in ipa:
+        logger.info("IPA generation failed or returned unmatched for: %.60s", whisper_text)
         return ("", window_start, -1)
+    logger.info("IPA result: %.80s", ipa)
 
     window_text = "\n\n".join(paragraphs[window_start: window_start + WINDOW_SIZE])
 
@@ -266,12 +270,15 @@ def align_utterance_to_text(
             identify_phonetic_component_within_text, LANG_NAME, ipa, window_text
         )
         result = result.strip().strip("`")
+        logger.info("Alignment result: %.120s", result)
 
         if "unmatched" in result.lower():
+            logger.info("No match found for: %.60s", whisper_text)
             return ("", window_start, -1)
 
         match = _find_in_window(result, paragraphs, window_start)
         if match is not None:
+            logger.info("Match found: %s", result)
             new_start, para_idx = match
             return (result, new_start, para_idx)
 
@@ -370,6 +377,7 @@ def process_talk(
 
     for i, chunk in enumerate(chunks):
         whisper_text = transcribe_chunk(chunk)
+        logger.info("Chunk %d whisper: %.80s", i, whisper_text)
         matched_text, new_window_start, para_idx = align_utterance_to_text(
             whisper_text, paragraphs, window_start
         )
@@ -396,6 +404,13 @@ def process_talk(
 
     tts_count = 0
     n_unmatched = len(paragraphs) - len(matched_para_indices)
+    if len(paragraphs) > 0 and len(matched_para_indices) == 0:
+        logger.warning(
+            "Talk %s: 0/%d paragraphs matched — skipping TTS fallback to avoid all-synthetic output",
+            pair.stem, len(paragraphs),
+        )
+        return (0, 0)
+
     for para_idx, para in enumerate(paragraphs):
         if para_idx not in matched_para_indices:
             logger.debug("Generating TTS for unmatched paragraph %d: %.60s", para_idx, para)
