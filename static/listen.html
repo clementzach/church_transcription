@@ -563,6 +563,11 @@ const history = [];       // committed lines, max 3
 let pendingChunks = [];   // flat queue — new utterances append; drains at CHUNK_DELAY_MS
 let chunkTimer = null;
 
+// Auto-reconnect state (used when broadcaster replaces session, e.g. language change)
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 8;   // give up after ~16 s
+const RECONNECT_INTERVAL_MS  = 2000;
+
 // Audio streaming via AudioContext
 let audioCtx = null;
 let nextPlayTime = 0;                       // when the last scheduled chunk ends
@@ -627,6 +632,14 @@ function connect() {
     try { msg = JSON.parse(evt.data); } catch { return; }
 
     if (msg.type === 'error') {
+      const onListenerScreen = document.getElementById('listener-screen').style.display !== 'none';
+      if (onListenerScreen && msg.message && msg.message.includes('replaced')) {
+        // Broadcaster restarted (e.g. language change) — reconnect automatically.
+        ws.close();
+        reconnectAttempts = 0;
+        scheduleAutoReconnect(sessionId);
+        return;
+      }
       showError(msg.message || 'Connection failed');
       ws.close();
       return;
@@ -666,6 +679,68 @@ function connect() {
       showListenerScreen(sessionId);
     }
   }, 600);
+}
+
+function scheduleAutoReconnect(sessionId) {
+  const tag = document.getElementById('listen-lang-tag');
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    tag.textContent = (LANG_NAMES[selectedLang] || selectedLang) + '  (disconnected)';
+    return;
+  }
+  reconnectAttempts++;
+  tag.textContent = (LANG_NAMES[selectedLang] || selectedLang) + '  (reconnecting…)';
+  setTimeout(() => attemptAutoReconnect(sessionId), RECONNECT_INTERVAL_MS);
+}
+
+function attemptAutoReconnect(sessionId) {
+  if (ws) { try { ws.close(); } catch (_) {} }
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/church_transcription/listen-stream`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ session_id: sessionId, language: selectedLang }));
+  });
+
+  ws.addEventListener('message', evt => {
+    if (evt.data instanceof ArrayBuffer) { enqueueAudio(evt.data); return; }
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+
+    if (msg.type === 'error') {
+      ws.close();
+      if (msg.message && msg.message.includes('replaced')) {
+        reconnectAttempts = 0; // broadcaster changed again — reset counter
+      } else {
+        // Permanent error (session ended or expired) — stop retrying.
+        reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+      }
+      scheduleAutoReconnect(sessionId);
+      return;
+    }
+
+    // Any successful message means we're reconnected.
+    reconnectAttempts = 0;
+    const tag = document.getElementById('listen-lang-tag');
+    tag.textContent = LANG_NAMES[selectedLang];
+    tag.style.color = LANG_COLORS[selectedLang];
+
+    if (msg.type === 'audio_config') {
+      audioConfig = { sampleRate: msg.sample_rate, channels: msg.channels, sampleWidth: msg.sample_width };
+    } else if (msg.type === 'text') {
+      commitLine(msg.text);
+    }
+  });
+
+  ws.addEventListener('close', evt => {
+    if (evt.code === 1000) return;
+    scheduleAutoReconnect(sessionId);
+  });
+
+  ws.addEventListener('error', () => {
+    scheduleAutoReconnect(sessionId);
+  });
 }
 
 function showError(msg) {
