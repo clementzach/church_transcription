@@ -314,6 +314,22 @@
     color: #444;
     letter-spacing: 0.12em;
   }
+  #session-code-input {
+    font-family: monospace;
+    font-size: 16px;
+    font-weight: 700;
+    color: #444;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: 1.5px solid #ddd;
+    border-radius: 6px;
+    padding: 2px 6px;
+    width: 7.5ch;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  #session-code-input:focus { border-color: #aaa; }
+  #session-code-input.error { border-color: #ef4444; }
   #listener-link {
     font-size: 11px;
     color: #999;
@@ -538,7 +554,8 @@
 
     <div id="session-info">
       <span id="session-id-label">Session</span>
-      <span id="session-id-value">——————</span>
+      <input id="session-code-input" type="text" maxlength="6" placeholder="XXXXXX" autocomplete="off" spellcheck="false" title="Enter a 6-character session code">
+      <span id="session-id-value" style="display:none"></span>
       <button id="copy-session-btn" disabled title="Copy session ID">Copy</button>
       <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
     </div>
@@ -637,9 +654,9 @@
 
     <h3>Starting a session</h3>
     <ul>
-      <li>Click <strong>Start</strong> and allow microphone access when prompted. A session ID will appear in the top bar.</li>
-      <li>Share the session ID with listeners so they can follow along on their devices at the Listener page.</li>
-      <li>Click <strong>Stop</strong> to end the session. Sessions automatically expire after 2 hours.</li>
+      <li>Type a <strong>6-character session code</strong> (letters and numbers) in the Session box in the top bar, then click <strong>Start</strong> and allow microphone access when prompted.</li>
+      <li>Share the session code with listeners so they can follow along on their devices at the Listener page.</li>
+      <li>Click <strong>Stop</strong> to end the session and free the code. Sessions also automatically expire after 2 hours.</li>
     </ul>
 
     <h3>Spoken language</h3>
@@ -706,14 +723,41 @@ const chunkTimers   = Object.fromEntries(ALL_LANGS.map(l => [l, null]));
 const CHUNK_DELAY_MS = 1200;
 
 // ── UI refs ────────────────────────────────────────────────────────────────
-const startBtn      = document.getElementById('start-btn');
-const stopBtn       = document.getElementById('stop-btn');
-const fsBtn         = document.getElementById('fs-btn');
-const statusDot     = document.getElementById('status-dot');
-const bottomPartial = document.getElementById('bottom-partial');
-const sessionIdEl   = document.getElementById('session-id-value');
+const startBtn       = document.getElementById('start-btn');
+const stopBtn        = document.getElementById('stop-btn');
+const fsBtn          = document.getElementById('fs-btn');
+const statusDot      = document.getElementById('status-dot');
+const bottomPartial  = document.getElementById('bottom-partial');
+const sessionIdEl    = document.getElementById('session-id-value');
+const sessionCodeInput = document.getElementById('session-code-input');
 const copySessionBtn = document.getElementById('copy-session-btn');
 const qrBtn          = document.getElementById('qr-btn');
+
+// ── Session code input ─────────────────────────────────────────────────────
+function updateStartBtn() {
+  startBtn.disabled = sessionCodeInput.value.length !== 6;
+}
+
+sessionCodeInput.addEventListener('input', () => {
+  sessionCodeInput.value = sessionCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  sessionCodeInput.classList.remove('error');
+  updateStartBtn();
+  // Keep URL in sync so a refresh restores the code.
+  const url = new URL(location.href);
+  if (sessionCodeInput.value) {
+    url.searchParams.set('code', sessionCodeInput.value);
+  } else {
+    url.searchParams.delete('code');
+  }
+  history.replaceState(null, '', url);
+});
+
+// Pre-fill from URL query param so a refresh restores the code.
+const _prefilledCode = new URLSearchParams(location.search).get('code');
+if (_prefilledCode) {
+  sessionCodeInput.value = _prefilledCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+}
+updateStartBtn();
 
 // ── Language toggle ────────────────────────────────────────────────────────
 document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -862,23 +906,34 @@ async function startSession() {
 
   clearReconnectTimer();
 
-  // Init session — backend builds the Gladia config and stores the URL.
-  try {
-    const resp = await fetch('/church_transcription/init-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ language: selectedLang }),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`Init session failed (${resp.status}): ${text}`);
+  // Only init a new Gladia session when we don't already have one (reconnect skips this).
+  if (!currentSessionId) {
+    const code = sessionCodeInput.value.trim();
+    if (code.length !== 6) return;
+
+    try {
+      const resp = await fetch('/church_transcription/init-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: selectedLang, session_id: code }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        sessionCodeInput.classList.add('error');
+        alert(data.error || `Failed to start session (${resp.status})`);
+        return;
+      }
+      currentSessionId = data.session_id;
+    } catch (err) {
+      alert('Failed to start session: ' + err.message);
+      return;
     }
-    const data = await resp.json();
-    if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; qrBtn.disabled = false; }
-    if (!currentSessionId) throw new Error('No session_id in response: ' + JSON.stringify(data));
-  } catch (err) {
-    alert('Failed to start session: ' + err.message);
-    return;
+
+    sessionIdEl.textContent = currentSessionId;
+    sessionCodeInput.style.display = 'none';
+    sessionIdEl.style.display = '';
+    copySessionBtn.disabled = false;
+    qrBtn.disabled = false;
   }
 
   // Get mic
@@ -943,7 +998,22 @@ async function stopSession(userInitiated = true) {
   stopAudio();
 
   if (userInitiated) {
-    startBtn.disabled = false;
+    // Free the session code so another broadcaster can reuse it.
+    if (currentSessionId) {
+      fetch('/church_transcription/end-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: currentSessionId }),
+      }).catch(() => {});
+    }
+    currentSessionId = null;
+
+    // Restore code input.
+    sessionIdEl.style.display = 'none';
+    sessionCodeInput.style.display = '';
+    copySessionBtn.disabled = true;
+    qrBtn.disabled = true;
+    updateStartBtn();
     stopBtn.disabled = true;
     statusDot.classList.remove('live');
     bottomPartial.textContent = '';
@@ -1126,6 +1196,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') guideOverl
 // ── Init render ───────────────────────────────────────────────────────────
 ALL_LANGS.forEach(renderPanel);
 updateGridLayout();
+updateStartBtn();
 </script>
 </body>
 </html>

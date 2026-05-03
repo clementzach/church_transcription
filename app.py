@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import queue
-import secrets
 import string
 import threading
 import time
@@ -93,6 +92,7 @@ GOOGLE_TTS_VOICES = {
     'no': 'Charon',
 }
 GOOGLE_TTS_LOCALES = {
+    'en': 'en-US',
     'es': 'es-US',
     'pt': 'pt-BR',
     'ht': 'fr-HT',
@@ -154,11 +154,6 @@ def _broadcast(session_id, lang, message):
             pass
 
 
-def _generate_session_id():
-    chars = string.ascii_uppercase + string.digits
-    return ''.join(secrets.choice(chars) for _ in range(6))
-
-
 def _expire_session(session_id):
     """Called by the session timer after SESSION_TIMEOUT_SECS."""
     log.info("Session %s timed out after %ds", session_id, SESSION_TIMEOUT_SECS)
@@ -168,7 +163,7 @@ def _expire_session(session_id):
         return
 
     error_msg = json.dumps({'type': 'error', 'message': 'Session expired (2-hour limit reached)'})
-    for lang in TRANSLATION_LANGS:
+    for lang in ALL_LANGS:
         # Signal TTS worker to shut down.
         _force_put(session['tts_queues'][lang], None)
         # Notify listeners: send error then close sentinel.
@@ -294,7 +289,25 @@ async def listen():
 async def init_session(request: Request):
     body = await request.json()
     src_lang = body.get('language', 'auto')
-    log.info("init-session called, language=%s", src_lang)
+    session_id = (body.get('session_id') or '').upper().strip()
+    log.info("init-session called, session_id=%s language=%s", session_id, src_lang)
+
+    valid_chars = string.ascii_uppercase + string.digits
+    if not session_id or len(session_id) != 6 or not all(c in valid_chars for c in session_id):
+        return Response(
+            content=json.dumps({'error': 'Session code must be exactly 6 alphanumeric characters'}),
+            status_code=400,
+            media_type='application/json',
+        )
+
+    # Quick pre-check to avoid unnecessary Gladia API calls.
+    with _lock:
+        if session_id in sessions:
+            return Response(
+                content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
+                status_code=409,
+                media_type='application/json',
+            )
 
     # Build the Gladia config server-side.
     config = copy.deepcopy(GLADIA_CONFIG_BASE)
@@ -323,20 +336,27 @@ async def init_session(request: Request):
         data = resp.json()
         gladia_url = data.get('url') or data.get('websocket_url') or data.get('ws_url', '')
 
-        session_id = _generate_session_id()
         timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
         timer.daemon = True
         session = {
             'start_time': time.time(),
+            'src_lang': src_lang,
             'gladia_url': gladia_url,
-            'listener_registry': {lang: [] for lang in TRANSLATION_LANGS},
-            'tts_queues': {lang: queue.Queue(maxsize=1) for lang in TRANSLATION_LANGS},
+            'listener_registry': {lang: [] for lang in ALL_LANGS},
+            'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
             'timer': timer,
         }
+        # Atomic check-and-insert to handle concurrent requests with the same code.
         with _lock:
+            if session_id in sessions:
+                return Response(
+                    content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
+                    status_code=409,
+                    media_type='application/json',
+                )
             sessions[session_id] = session
 
-        for lang in TRANSLATION_LANGS:
+        for lang in ALL_LANGS:
             threading.Thread(
                 target=_tts_worker, args=(session_id, lang), daemon=True
             ).start()
@@ -347,6 +367,33 @@ async def init_session(request: Request):
         return {'session_id': session_id}
     log.error("Gladia init failed: %d %s", resp.status_code, resp.text)
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@app.post("/end-session")
+async def end_session(request: Request):
+    body = await request.json()
+    session_id = (body.get('session_id') or '').upper().strip()
+
+    with _lock:
+        session = sessions.pop(session_id, None)
+
+    if not session:
+        return {'ok': True}
+
+    session['timer'].cancel()
+
+    error_msg = json.dumps({'type': 'error', 'message': 'Session ended by broadcaster'})
+    for lang in ALL_LANGS:
+        _force_put(session['tts_queues'][lang], None)
+        for q in list(session['listener_registry'].get(lang, [])):
+            try:
+                _loop.call_soon_threadsafe(q.put_nowait, error_msg)
+                _loop.call_soon_threadsafe(q.put_nowait, None)
+            except Exception:
+                pass
+
+    log.info("Session ended by broadcaster: %s", session_id)
+    return {'ok': True}
 
 
 @app.websocket("/stream")
@@ -380,12 +427,13 @@ async def stream(ws: WebSocket):
         return
 
     gladia_url = session.get('gladia_url', '')
+    src_lang = session.get('src_lang', 'auto')
     if not gladia_url or not gladia_url.startswith("wss://"):
         log.error("stream: invalid or missing Gladia URL in session: %r", gladia_url)
         await ws.close()
         return
 
-    log.info("stream: session=%s connecting to Gladia at %s", session_id, gladia_url)
+    log.info("stream: session=%s src_lang=%s connecting to Gladia at %s", session_id, src_lang, gladia_url)
     audio_chunks = 0
     gladia_msgs = 0
     try:
@@ -427,10 +475,17 @@ async def stream(ws: WebSocket):
                             msg_type = msg.get('type')
 
                             if msg_type == 'transcript':
-                                utterance = (msg.get('data') or {}).get('utterance') or {}
+                                data_obj = msg.get('data') or {}
+                                utterance = data_obj.get('utterance') or {}
                                 if utterance.get('text'):
                                     utterance['text'] = _filter_text(utterance['text'])
                                     to_send = json.dumps(msg)
+                                # English TTS comes from transcripts when source is English.
+                                # In auto/non-English-source mode it comes from translation msgs.
+                                if src_lang == 'en':
+                                    is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
+                                    if is_final and utterance.get('text'):
+                                        _enqueue_tts(session_id, 'en', utterance['text'])
 
                             elif msg_type == 'translation':
                                 data_field = msg.get('data', {})
@@ -440,7 +495,7 @@ async def stream(ws: WebSocket):
                                     to_send = json.dumps(msg)
                                 lang = (data_field.get('target_language') or '').lower()
                                 text = translated.get('text', '')
-                                if lang in TRANSLATION_LANGS and text:
+                                if lang in ALL_LANGS and text:
                                     _enqueue_tts(session_id, lang, text)
                         except Exception:
                             pass  # on any parse error, forward the original raw message
@@ -495,7 +550,7 @@ async def listen_stream(ws: WebSocket):
     q = asyncio.Queue()
     with _lock:
         session = sessions.get(session_id)
-        if not session or lang not in TRANSLATION_LANGS:
+        if not session or lang not in ALL_LANGS:
             log.warning("listen-stream: invalid session_id=%s or lang=%s", session_id, lang)
             await ws.send_text(json.dumps({'type': 'error', 'message': 'Invalid session ID or language'}))
             await ws.close()

@@ -127,6 +127,7 @@
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
+  .lang-opt[data-lang="en"] { --c: var(--en); }
   .lang-opt[data-lang="es"] { --c: var(--es); }
   .lang-opt[data-lang="ht"] { --c: var(--ht); }
   .lang-opt[data-lang="pt"] { --c: var(--pt); }
@@ -440,9 +441,9 @@
   /* ── Mobile ── */
   @media (max-width: 500px) {
     #lang-buttons { flex-wrap: wrap; }
-    .lang-opt { flex: 1 1 calc(33% - 7px); }
+    .lang-opt { flex: 1 1 calc(25% - 8px); }
     #lang-names { flex-wrap: wrap; }
-    .lang-name { flex: 1 1 calc(33% - 7px); }
+    .lang-name { flex: 1 1 calc(25% - 8px); }
   }
 </style>
 </head>
@@ -464,6 +465,7 @@
     <div id="lang-choice">
       <label class="field-label">Language</label>
       <div id="lang-buttons">
+        <button class="lang-opt" data-lang="en">EN</button>
         <button class="lang-opt" data-lang="es">ES</button>
         <button class="lang-opt" data-lang="ht">HT</button>
         <button class="lang-opt" data-lang="pt">PT</button>
@@ -472,6 +474,7 @@
         <button class="lang-opt" data-lang="no">NO</button>
       </div>
       <div id="lang-names">
+        <span class="lang-name">English</span>
         <span class="lang-name">Spanish</span>
         <span class="lang-name">Haitian Creole</span>
         <span class="lang-name">Portuguese</span>
@@ -525,7 +528,7 @@
     <h3>Connecting</h3>
     <ul>
       <li>Enter the <strong>Session ID</strong> shared by the broadcaster — it's a 6-character code shown on their screen.</li>
-      <li>Select your preferred <strong>language</strong>: Spanish, Haitian Creole, Portuguese, Mandarin, or French.</li>
+      <li>Select your preferred <strong>language</strong>: English, Spanish, Haitian Creole, Portuguese, Mandarin, French, or Norwegian.</li>
       <li>Tap <strong>Connect</strong>. The session must already be live (broadcaster has clicked Start).</li>
     </ul>
 
@@ -551,8 +554,8 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7', zh: '#06b6d4', fr: '#ec4899' };
-const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh: 'Mandarin', fr: 'French', no: 'Norwegian' };
+const LANG_COLORS = { en: '#3b82f6', es: '#f97316', ht: '#22c55e', pt: '#a855f7', zh: '#06b6d4', fr: '#ec4899', no: '#ef4444' };
+const LANG_NAMES  = { en: 'English', es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh: 'Mandarin', fr: 'French', no: 'Norwegian' };
 
 let selectedLang = null;
 let ws = null;
