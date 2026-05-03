@@ -55,9 +55,13 @@ def identify_phonetic_component_within_text(lang_name, phonetic_string, possible
 }
 
     prompt = (
-f"""Your role is to take a phonetic in {lang_name} input and match it to the corresponding portion of the provided text. Only match the portion of the provided text that matches the phonetic string exactly, even if this means only partial sentences or paragraphs are returned. Do not include any additional words in the provided text. 
+f"""Your role is to take a phonetic {lang_name} input and match it to the portion of the provided text that matches the phonetic syllablles exactly, with a one-to-one mapping between each chunk in the phonetic input and each syllable of words you include in your output. 
 
-If it does not match anything in the provided text, write out ```---UNMATCHED---``` and no additional text.
+Only match the portion of the provided text that matches the phonetic transcription. Return partial sentences or paragraphs if the phonetic input only covers part of a text input. 
+
+Do not include any additional words in the provided text. 
+
+If the phonetic string does not match anything in the provided text, write out ```---UNMATCHED---``` and no additional text.
 
 Example input 1: ```{json.dumps(example_input)}```
 Example output 1: ```Kisa Papa nou ki nan Syèl la dezire de nou menm?```
@@ -68,7 +72,7 @@ Example output 2: ```---UNMATCHED---```
 Example input 3: ```{json.dumps(example_input_partial_only)}```
 Example output 3: ```Chak dimanch kat la te ranpli. Pou yon jèn detantè```
 
-Do not write out any context or additional output.
+Do not write out any context or additional output. All syllables in words provided in your output should map directly to exactly one syllable provided in the input. 
 
 Your input: ```{json.dumps(current_input)}```
 """
