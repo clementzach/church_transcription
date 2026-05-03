@@ -356,7 +356,7 @@ def _talk_already_processed(pair: TalkPair, data_dir: Path) -> bool:
 
 
 def process_talk(
-    pair: TalkPair, seg_counter: list[int], metadata_handle, data_dir: Path = DATA_DIR
+    pair: TalkPair, metadata_handle, data_dir: Path = DATA_DIR
 ) -> tuple[int, int]:
     """Returns (n_real_segments, n_tts_segments)."""
     logger.info("Processing %s/%s/%s", pair.year, pair.month, pair.stem)
@@ -371,6 +371,7 @@ def process_talk(
         logger.warning("No paragraphs for %s", pair.stem)
         return (0, 0)
 
+    seg_counter = [0]
     utterances: list[Utterance] = []
     window_start = 0
     matched_para_indices: set[int] = set()
@@ -449,7 +450,6 @@ def run_pipeline(
     if limit is not None:
         pairs = pairs[:limit]
 
-    seg_counter = [sum(1 for _ in data_dir.glob("*.wav"))]
     total_real = 0
     total_tts = 0
 
@@ -459,7 +459,7 @@ def run_pipeline(
                 logger.info("Skipping already-processed talk: %s", pair.stem)
                 continue
             try:
-                n_real, n_tts = process_talk(pair, seg_counter, meta_f, data_dir)
+                n_real, n_tts = process_talk(pair, meta_f, data_dir)
                 total_real += n_real
                 total_tts += n_tts
             except Exception as e:
