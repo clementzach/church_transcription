@@ -43,19 +43,50 @@ _vocoder: SpeechT5HifiGan | None = None
 _speaker_embeddings: torch.Tensor | None = None
 
 
+def _fetch_speaker_embedding() -> torch.Tensor:
+    """Load one xvector from cmu-arctic-xvectors, working around the legacy dataset script."""
+    try:
+        ds = load_dataset(SPEAKER_EMBEDDINGS_DATASET, split="validation")
+        xvec = ds[SPEAKER_IDX]["xvector"]
+    except Exception as primary_err:
+        # datasets ≥3.0 dropped support for legacy .py dataset scripts; fall back to
+        # downloading the parquet shards directly via huggingface_hub + pyarrow.
+        logger.warning(
+            "load_dataset failed (%s); falling back to direct parquet download", primary_err
+        )
+        from huggingface_hub import hf_hub_download, list_repo_files
+        import pyarrow.parquet as pq
+
+        parquet_files = sorted(
+            f
+            for f in list_repo_files(SPEAKER_EMBEDDINGS_DATASET, repo_type="dataset")
+            if f.endswith(".parquet") and "validation" in f
+        )
+        remaining = SPEAKER_IDX
+        for fname in parquet_files:
+            local = hf_hub_download(SPEAKER_EMBEDDINGS_DATASET, fname, repo_type="dataset")
+            table = pq.read_table(local)
+            if remaining < len(table):
+                xvec = table["xvector"][remaining].as_py()
+                break
+            remaining -= len(table)
+        else:
+            raise RuntimeError(
+                f"Speaker embedding index {SPEAKER_IDX} not found in {SPEAKER_EMBEDDINGS_DATASET}"
+            ) from primary_err
+    return torch.tensor(xvec).unsqueeze(0).to(DEVICE)
+
+
 def _get_tts_components() -> tuple:
     global _processor, _model, _vocoder, _speaker_embeddings
     if _model is None:
         logger.info("Loading SpeechT5 processor/model: %s", HF_MODEL_ID)
-        _processor = SpeechT5Processor.from_pretrained(HF_MODEL_ID)
-        _model = SpeechT5ForTextToSpeech.from_pretrained(HF_MODEL_ID).to(DEVICE)
-        _vocoder = SpeechT5HifiGan.from_pretrained(HF_VOCODER_ID).to(DEVICE)
-        embeddings_dataset = load_dataset(SPEAKER_EMBEDDINGS_DATASET, split="validation")
-        _speaker_embeddings = (
-            torch.tensor(embeddings_dataset[SPEAKER_IDX]["xvector"])
-            .unsqueeze(0)
-            .to(DEVICE)
-        )
+        proc = SpeechT5Processor.from_pretrained(HF_MODEL_ID)
+        mdl = SpeechT5ForTextToSpeech.from_pretrained(HF_MODEL_ID).to(DEVICE)
+        voc = SpeechT5HifiGan.from_pretrained(HF_VOCODER_ID).to(DEVICE)
+        emb = _fetch_speaker_embedding()
+        # assign all at once so a partial failure doesn't leave _model set but _speaker_embeddings None
+        _processor, _model, _vocoder, _speaker_embeddings = proc, mdl, voc, emb
         logger.info("SpeechT5 components loaded on %s", DEVICE)
     return _processor, _model, _vocoder, _speaker_embeddings
 
