@@ -1,7 +1,7 @@
-from google import genai
+import openai
 import json
 
-gemini_client = genai.Client()
+openai_client = openai.OpenAI()
 
 def get_ipa_string(lang_name, utterance):
     """
@@ -28,8 +28,8 @@ Example input: ```I acknowledged that I made a mistake and asked for forgiveness
 Example output: ```aɪ | æk | nɒl | ɪdʒd | ðæt | aɪ | meɪd | ə | mɪs | teɪk | ænd | æskt | fər | fər | ɡɪv | nəs```
 Your input: ```{utterance}```"""
     )
-    ipa_resp = gemini_client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
-    ipa = ipa_resp.text.strip()
+    ipa_resp = openai_client.chat.completions.create(model="gpt-5.4-nano-2026-03-17", messages=[{"role": "user", "content": prompt}])
+    ipa = ipa_resp.choices[0].message.content.strip()
     return ipa
 
 
@@ -77,6 +77,6 @@ Do not write out any context or additional output. All syllables in words provid
 Your input: ```{json.dumps(current_input)}```
 """
     )
-    ipa_resp = gemini_client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
-    ipa = ipa_resp.text.strip()
+    ipa_resp = openai_client.chat.completions.create(model="gpt-5.4-nano-2026-03-17", messages=[{"role": "user", "content": prompt}])
+    ipa = ipa_resp.choices[0].message.content.strip()
     return ipa
