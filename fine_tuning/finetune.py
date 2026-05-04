@@ -1,12 +1,14 @@
+import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 import evaluate
 import torch
-from datasets import Audio, concatenate_datasets, load_dataset
+from datasets import Audio, Dataset, concatenate_datasets
 from dotenv import load_dotenv
 from transformers import (
     Seq2SeqTrainer,
@@ -30,7 +32,8 @@ LANGUAGE = "Haitian Creole"
 LANGUAGE_CODE = "ht"
 TASK = "transcribe"
 SAMPLING_RATE = 16_000
-EVAL_SPLIT = 0.05
+
+N_EVAL_TALKS = 5  # number of real-speech talks held out for evaluation
 
 # Tuned for L4 (24 GB VRAM), 16 GB RAM, 4 vCPUs
 # Effective batch size = 16 * 2 = 32
@@ -39,13 +42,11 @@ PER_DEVICE_EVAL_BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 2
 LEARNING_RATE = 1e-5
 WARMUP_STEPS = 500
+CANDIDATE_MAX_STEPS = 3000
 LOGGING_STEPS = 25
 DATALOADER_NUM_WORKERS = 2
 
-# Phase 1: real speech only — establishes the baseline
-# Phase 2: adds synthetic data — measures the incremental benefit
-PHASE1_MAX_STEPS = 3000
-PHASE2_MAX_STEPS = 1000
+CANDIDATES = ("synthetic", "phonetic", "combined")
 
 
 @dataclass
@@ -71,33 +72,79 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         return batch
 
 
-def load_split_datasets(output_root: Path):
-    """Load the audiofolder dataset and split into real-train, all-train, and eval.
+def _extract_talk_id(file_name: str) -> str:
+    """Stable talk identifier that is consistent across seg_ and syn_ prefixes.
 
-    Eval is drawn exclusively from real speech so the benchmark is consistent
-    across both phases.
+    data/seg_2012_10_Aprann_avek_ke_nou_00003.wav
+    data/syn_2012_10_Aprann_avek_ke_nou_00003.wav
+    both → "2012_10_Aprann_avek_ke_nou"
     """
-    dataset = load_dataset("audiofolder", data_dir=str(output_root), split="train")
-    dataset = dataset.cast_column("audio", Audio(sampling_rate=SAMPLING_RATE))
+    stem = re.sub(r"_\d{5}$", "", Path(file_name).stem)
+    return re.sub(r"^(seg|syn)_", "", stem)
 
-    real_ds = dataset.filter(lambda x: not x["synthetic"])
-    synth_ds = dataset.filter(lambda x: x["synthetic"])
 
-    real_split = real_ds.train_test_split(test_size=EVAL_SPLIT, seed=42)
-    real_train = real_split["train"]
-    eval_ds = real_split["test"]
+def _load_audio_dataset(metadata_file: Path, output_root: Path) -> Dataset:
+    """Load a metadata JSONL as a HuggingFace Dataset with audio paths resolved."""
+    if not metadata_file.exists():
+        logger.warning("Metadata file not found, returning empty dataset: %s", metadata_file)
+        return Dataset.from_list([])
 
-    # Combine real train + all synthetic, then shuffle
-    if len(synth_ds) > 0:
-        all_train = concatenate_datasets([real_train, synth_ds]).shuffle(seed=42)
+    records = []
+    with open(metadata_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                r = json.loads(line)
+                r["audio"] = str(output_root / r["file_name"])
+                records.append(r)
+
+    ds = Dataset.from_list(records)
+    if len(ds) == 0:
+        return ds
+    return ds.cast_column("audio", Audio(sampling_rate=SAMPLING_RATE))
+
+
+def load_candidate_datasets(output_root: Path) -> tuple[Dataset, Dataset, Dataset, Dataset]:
+    """Return (eval_ds, synth_train, phonetic_train, combined_train).
+
+    Eval is drawn from exactly N_EVAL_TALKS real-speech talks (first N alphabetically).
+    Those same talk IDs are excluded from every training set, including synthetic data,
+    so no evaluation talk bleeds into any candidate's training run.
+    """
+    phonetic_full = _load_audio_dataset(output_root / "metadata.jsonl", output_root)
+    phonetic_full = phonetic_full.filter(lambda x: not x["synthetic"])
+
+    if len(phonetic_full) == 0:
+        raise RuntimeError("No phonetic-alignment data found in metadata.jsonl")
+
+    all_talk_ids = sorted({_extract_talk_id(fn) for fn in phonetic_full["file_name"]})
+    eval_talk_ids = set(all_talk_ids[:N_EVAL_TALKS])
+    logger.info("Eval talks (%d): %s", len(eval_talk_ids), sorted(eval_talk_ids))
+
+    eval_ds = phonetic_full.filter(
+        lambda x: _extract_talk_id(x["file_name"]) in eval_talk_ids
+    )
+    phonetic_train = phonetic_full.filter(
+        lambda x: _extract_talk_id(x["file_name"]) not in eval_talk_ids
+    )
+
+    synth_full = _load_audio_dataset(output_root / "synthetic_metadata.jsonl", output_root)
+    synth_train = synth_full.filter(
+        lambda x: _extract_talk_id(x["file_name"]) not in eval_talk_ids
+    ) if len(synth_full) > 0 else synth_full
+
+    if len(synth_train) > 0 and len(phonetic_train) > 0:
+        combined_train = concatenate_datasets([phonetic_train, synth_train]).shuffle(seed=42)
+    elif len(synth_train) > 0:
+        combined_train = synth_train
     else:
-        all_train = real_train
+        combined_train = phonetic_train
 
     logger.info(
-        "Dataset split — real train: %d, synthetic: %d, eval: %d",
-        len(real_train), len(synth_ds), len(eval_ds),
+        "Datasets — eval: %d | phonetic train: %d | synth train: %d | combined train: %d",
+        len(eval_ds), len(phonetic_train), len(synth_train), len(combined_train),
     )
-    return real_train, all_train, eval_ds, len(synth_ds)
+    return eval_ds, synth_train, phonetic_train, combined_train
 
 
 def make_prepare_fn(processor: WhisperProcessor):
@@ -125,22 +172,14 @@ def make_compute_metrics(processor: WhisperProcessor):
     return compute_metrics
 
 
-def _preprocess_datasets(processor, train_ds, eval_ds):
+def _preprocess(processor, ds: Dataset, desc: str) -> Dataset:
     prepare_fn = make_prepare_fn(processor)
-    col_names = train_ds.column_names
-    train_ds = train_ds.map(
+    return ds.map(
         prepare_fn,
-        remove_columns=col_names,
+        remove_columns=ds.column_names,
         num_proc=DATALOADER_NUM_WORKERS,
-        desc="Preprocessing train",
+        desc=desc,
     )
-    eval_ds = eval_ds.map(
-        prepare_fn,
-        remove_columns=eval_ds.column_names,
-        num_proc=DATALOADER_NUM_WORKERS,
-        desc="Preprocessing eval",
-    )
-    return train_ds, eval_ds
 
 
 def _build_trainer(
@@ -193,77 +232,74 @@ def _build_trainer(
     )
 
 
-def run_finetuning(
-    output_root: Path = OUTPUT_ROOT,
-    model_output_dir: Path = MODEL_OUTPUT_DIR,
-    resume_from_checkpoint: str | None = None,
-):
-    logger.info("Loading processor from %s", BASE_MODEL)
-    processor = WhisperProcessor.from_pretrained(BASE_MODEL, language=LANGUAGE, task=TASK)
-
-    logger.info("Loading dataset from %s", output_root)
-    real_train_raw, all_train_raw, eval_raw, n_synthetic = load_split_datasets(output_root)
-
-    # Pre-process both training splits. HuggingFace datasets caches map outputs on
-    # disk, so the eval set (shared across phases) is only processed once.
-    real_train, eval_ds = _preprocess_datasets(processor, real_train_raw, eval_raw)
-    all_train, _ = _preprocess_datasets(processor, all_train_raw, eval_raw)
-
-    # ── Phase 1: real speech only ─────────────────────────────────────────────
-    phase1_dir = model_output_dir / "phase1"
-    logger.info("Phase 1: training on %d real samples → %s", len(real_train), phase1_dir)
-
+def _fresh_model() -> WhisperForConditionalGeneration:
     model = WhisperForConditionalGeneration.from_pretrained(BASE_MODEL)
     model.config.use_cache = False
     model.generation_config.language = LANGUAGE_CODE
     model.generation_config.task = TASK
     model.generation_config.forced_decoder_ids = None
+    return model
 
-    trainer1 = _build_trainer(
-        model, processor, real_train, eval_ds,
-        output_dir=phase1_dir,
-        max_steps=PHASE1_MAX_STEPS,
-        warmup_steps=WARMUP_STEPS,
-    )
-    trainer1.train(resume_from_checkpoint=resume_from_checkpoint)
-    trainer1.save_model()
-    processor.save_pretrained(str(phase1_dir))
-    phase1_wer = trainer1.state.best_metric
-    logger.info("Phase 1 complete — best WER: %.2f%%", phase1_wer or 0.0)
 
-    # ── Phase 2: real + synthetic ─────────────────────────────────────────────
-    if n_synthetic == 0:
-        logger.warning("No synthetic samples found — skipping Phase 2")
-        return
+def run_finetuning(
+    output_root: Path = OUTPUT_ROOT,
+    model_output_dir: Path = MODEL_OUTPUT_DIR,
+    candidate: str = "all",
+    resume_from_checkpoint: Optional[str] = None,
+) -> None:
+    if candidate != "all" and candidate not in CANDIDATES:
+        raise ValueError(f"--candidate must be one of {('all',) + CANDIDATES}, got '{candidate}'")
 
-    phase2_dir = model_output_dir / "phase2"
+    logger.info("Loading processor from %s", BASE_MODEL)
+    processor = WhisperProcessor.from_pretrained(BASE_MODEL, language=LANGUAGE, task=TASK)
+
+    logger.info("Loading datasets from %s", output_root)
+    eval_raw, synth_train_raw, phonetic_train_raw, combined_train_raw = load_candidate_datasets(output_root)
+
+    # Preprocess eval once; all three candidates share it
+    eval_ds = _preprocess(processor, eval_raw, desc="Preprocessing eval")
+
+    candidate_data = {
+        "synthetic": synth_train_raw,
+        "phonetic":  phonetic_train_raw,
+        "combined":  combined_train_raw,
+    }
+
+    to_run = CANDIDATES if candidate == "all" else (candidate,)
+    results: dict[str, float | None] = {}
+
+    for name in to_run:
+        train_raw = candidate_data[name]
+        if len(train_raw) == 0:
+            logger.warning("Candidate '%s' has no training data — skipping", name)
+            results[name] = None
+            continue
+
+        out_dir = model_output_dir / f"candidate_{name}"
+        logger.info(
+            "Training candidate '%s' on %d samples → %s",
+            name, len(train_raw), out_dir,
+        )
+
+        train_ds = _preprocess(processor, train_raw, desc=f"Preprocessing {name} train")
+        model = _fresh_model()
+        trainer = _build_trainer(
+            model, processor, train_ds, eval_ds,
+            output_dir=out_dir,
+            max_steps=CANDIDATE_MAX_STEPS,
+            warmup_steps=WARMUP_STEPS,
+        )
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        trainer.save_model()
+        processor.save_pretrained(str(out_dir))
+        results[name] = trainer.state.best_metric
+        logger.info("Candidate '%s' best WER: %.2f%%", name, results[name] or 0.0)
+
     logger.info(
-        "Phase 2: continuing from Phase 1 weights on %d samples (%d real + %d synthetic) → %s",
-        len(all_train), len(real_train), n_synthetic, phase2_dir,
-    )
-
-    # Load Phase 1 weights fresh — don't restore optimizer state so Phase 2
-    # is a clean fine-tune on top of the Phase 1 model.
-    model2 = WhisperForConditionalGeneration.from_pretrained(str(phase1_dir))
-    model2.config.use_cache = False
-    model2.generation_config.language = LANGUAGE_CODE
-    model2.generation_config.task = TASK
-    model2.generation_config.forced_decoder_ids = None
-
-    trainer2 = _build_trainer(
-        model2, processor, all_train, eval_ds,
-        output_dir=phase2_dir,
-        max_steps=PHASE2_MAX_STEPS,
-        warmup_steps=min(100, PHASE2_MAX_STEPS // 10),
-    )
-    trainer2.train()
-    trainer2.save_model()
-    processor.save_pretrained(str(phase2_dir))
-    phase2_wer = trainer2.state.best_metric
-
-    logger.info(
-        "Training complete — Phase 1 WER (real only): %.2f%% | Phase 2 WER (real + synthetic): %.2f%%",
-        phase1_wer or 0.0, phase2_wer or 0.0,
+        "Results — synthetic: %s | phonetic: %s | combined: %s",
+        f"{results.get('synthetic'):.2f}%" if results.get("synthetic") is not None else "skipped",
+        f"{results.get('phonetic'):.2f}%" if results.get("phonetic") is not None else "skipped",
+        f"{results.get('combined'):.2f}%" if results.get("combined") is not None else "skipped",
     )
 
 
@@ -273,12 +309,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
     parser.add_argument("--model-output-dir", type=Path, default=MODEL_OUTPUT_DIR)
-    parser.add_argument("--resume-from-checkpoint", type=str, default=None,
-                        help="Checkpoint path to resume Phase 1 from")
+    parser.add_argument(
+        "--candidate",
+        choices=("all",) + CANDIDATES,
+        default="all",
+        help="Which candidate model to train (default: all three)",
+    )
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help="Checkpoint path to resume from (only meaningful with --candidate <single>)",
+    )
     args = parser.parse_args()
 
     run_finetuning(
         output_root=args.output_root,
         model_output_dir=args.model_output_dir,
+        candidate=args.candidate,
         resume_from_checkpoint=args.resume_from_checkpoint,
     )
