@@ -1,46 +1,24 @@
-from transformers import pipeline
-import torch
+from google import genai
 import json
 
-# HuggingFace model ID — change to whichever Gemma 4 variant you want to use.
-# Requires ~62 GB unified memory for bfloat16; use a quantized GGUF via llama-cpp
-# or set load_in_4bit=True (needs bitsandbytes) if memory is tight.
-MODEL_ID = "google/gemma-4-12b-it"
-
-_pipe = None
-
-
-def _get_pipe():
-    global _pipe
-    if _pipe is None:
-        _pipe = pipeline(
-            "text-generation",
-            model=MODEL_ID,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",  # uses MPS on Apple Silicon, CUDA if available, else CPU
-        )
-    return _pipe
-
-
-def _generate(prompt: str) -> str:
-    pipe = _get_pipe()
-    messages = [{"role": "user", "content": prompt}]
-    result = pipe(messages, max_new_tokens=512, do_sample=False)
-    # chat-template pipelines return messages list; last entry is the assistant turn
-    return result[0]["generated_text"][-1]["content"].strip()
-
+gemini_client = genai.Client()
 
 def get_ipa_string(lang_name, utterance):
     """
     Get a phonetic representation of an input string using IPA.
-    Used to convert possibly-garbled speech-to-text outputs into phonetic intermediaries.
+    Used to convert possibly-garbled speech-to-text outputs into a phonetic intermediaries.
+
+    Args:
+        lang_name: The language to use.
+        utterance: An utterance to transcribe into IPA form.
+
     """
     prompt = (
 f"""Write this possibly garbled {lang_name} transcription out using the international phonetic alphabet.
 
 Break up words into individual syllables and separate each syllable with a " | " delimiter.
 
-If words appear in other languages, include the phonetic transcriptions of those words in your response.
+If words appear in other langages, include the phonetic transcriptions of those words in your response.
 
 Each chunk should contain only one syllable. If there are multi-syllable words, break each one up and put another " | " delimiter between them.
 
@@ -50,7 +28,9 @@ Example input: ```I acknowledged that I made a mistake and asked for forgiveness
 Example output: ```aɪ | æk | nɒl | ɪdʒd | ðæt | aɪ | meɪd | ə | mɪs | teɪk | ænd | æskt | fər | fər | ɡɪv | nəs```
 Your input: ```{utterance}```"""
     )
-    return _generate(prompt)
+    ipa_resp = gemini_client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
+    ipa = ipa_resp.text.strip()
+    return ipa
 
 
 def identify_phonetic_component_within_text(lang_name, phonetic_string, possible_matching_string):
@@ -75,11 +55,11 @@ def identify_phonetic_component_within_text(lang_name, phonetic_string, possible
 }
 
     prompt = (
-f"""Your role is to take a phonetic {lang_name} input and match it to the portion of the provided text that matches the phonetic syllables exactly, with a one-to-one mapping between each chunk in the phonetic input and each syllable of words you include in your output.
+f"""Your role is to take a phonetic {lang_name} input and match it to the portion of the provided text that matches the phonetic syllablles exactly, with a one-to-one mapping between each chunk in the phonetic input and each syllable of words you include in your output. 
 
-Only match the portion of the provided text that matches the phonetic transcription. Return partial sentences or paragraphs if the phonetic input only covers part of a text input.
+Only match the portion of the provided text that matches the phonetic transcription. Return partial sentences or paragraphs if the phonetic input only covers part of a text input. 
 
-Do not include any additional words in the provided text.
+Do not include any additional words in the provided text. 
 
 If the phonetic string does not match anything in the provided text, write out ```---UNMATCHED---``` and no additional text.
 
@@ -92,9 +72,11 @@ Example output 2: ```---UNMATCHED---```
 Example input 3: ```{json.dumps(example_input_partial_only)}```
 Example output 3: ```Chak dimanch kat la te ranpli. Pou yon jèn detantè```
 
-Do not write out any context or additional output. All syllables in words provided in your output should map directly to exactly one syllable provided in the input.
+Do not write out any context or additional output. All syllables in words provided in your output should map directly to exactly one syllable provided in the input. 
 
 Your input: ```{json.dumps(current_input)}```
 """
     )
-    return _generate(prompt)
+    ipa_resp = gemini_client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
+    ipa = ipa_resp.text.strip()
+    return ipa
