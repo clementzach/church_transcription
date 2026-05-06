@@ -34,7 +34,7 @@ LANGUAGE_CODE = "ht"
 TASK = "transcribe"
 SAMPLING_RATE = 16_000
 
-N_EVAL_TALKS = 5  # number of real-speech talks held out for evaluation
+N_EVAL_TALKS = 10  # number of real-speech talks held out for evaluation
 
 # Tuned for L4 (24 GB VRAM), 16 GB RAM, 4 vCPUs
 # Effective batch size = 16 * 2 = 32
