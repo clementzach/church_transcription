@@ -182,7 +182,7 @@ def _preprocess(processor, ds: Dataset, desc: str) -> Dataset:
     return ds.map(
         prepare_fn,
         remove_columns=ds.column_names,
-        num_proc=DATALOADER_NUM_WORKERS,
+        num_proc=1,
         desc=desc,
     )
 
@@ -238,7 +238,7 @@ def _build_trainer(
         eval_dataset=eval_ds,
         data_collator=data_collator,
         compute_metrics=make_compute_metrics(processor),
-        tokenizer=processor.feature_extractor,
+        processing_class=processor.feature_extractor,
     )
 
 
