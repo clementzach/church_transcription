@@ -44,51 +44,68 @@ _speaker_embeddings: torch.Tensor | None = None
 
 
 def _fetch_speaker_embedding() -> torch.Tensor:
-    """Load one xvector from cmu-arctic-xvectors, working around the legacy dataset script."""
+    """Load one xvector from cmu-arctic-xvectors.
+
+    datasets ≥3.0 dropped support for legacy .py dataset scripts so load_dataset
+    fails on modern installs. The Datasets Server REST API fetches the single row
+    we need over plain HTTP without touching the loading script.
+    """
     try:
         ds = load_dataset(SPEAKER_EMBEDDINGS_DATASET, split="validation")
         xvec = ds[SPEAKER_IDX]["xvector"]
     except Exception as primary_err:
-        # datasets ≥3.0 dropped support for legacy .py dataset scripts; fall back to
-        # downloading the parquet shards directly via huggingface_hub + pyarrow.
         logger.warning(
-            "load_dataset failed (%s); falling back to direct parquet download", primary_err
+            "load_dataset failed (%s); fetching via HF Datasets Server API", primary_err
         )
-        from huggingface_hub import hf_hub_download, list_repo_files
-        import pyarrow.parquet as pq
+        import requests
 
-        parquet_files = sorted(
-            f
-            for f in list_repo_files(SPEAKER_EMBEDDINGS_DATASET, repo_type="dataset")
-            if f.endswith(".parquet") and "validation" in f
+        url = (
+            "https://datasets-server.huggingface.co/rows"
+            f"?dataset={SPEAKER_EMBEDDINGS_DATASET.replace('/', '%2F')}"
+            "&config=default&split=validation"
+            f"&offset={SPEAKER_IDX}&length=1"
         )
-        remaining = SPEAKER_IDX
-        for fname in parquet_files:
-            local = hf_hub_download(SPEAKER_EMBEDDINGS_DATASET, fname, repo_type="dataset")
-            table = pq.read_table(local)
-            if remaining < len(table):
-                xvec = table["xvector"][remaining].as_py()
-                break
-            remaining -= len(table)
-        else:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        rows = resp.json().get("rows", [])
+        if not rows:
             raise RuntimeError(
-                f"Speaker embedding index {SPEAKER_IDX} not found in {SPEAKER_EMBEDDINGS_DATASET}"
+                f"Datasets Server returned no rows for {SPEAKER_EMBEDDINGS_DATASET}"
             ) from primary_err
+        xvec = rows[0]["row"]["xvector"]
     return torch.tensor(xvec).unsqueeze(0).to(DEVICE)
 
 
 def _get_tts_components() -> tuple:
     global _processor, _model, _vocoder, _speaker_embeddings
+    # Load model components once and cache them; a failed embedding fetch must not
+    # prevent caching so that we don't re-download 400MB of weights per utterance.
     if _model is None:
         logger.info("Loading SpeechT5 processor/model: %s", HF_MODEL_ID)
         proc = SpeechT5Processor.from_pretrained(HF_MODEL_ID)
         mdl = SpeechT5ForTextToSpeech.from_pretrained(HF_MODEL_ID).to(DEVICE)
         voc = SpeechT5HifiGan.from_pretrained(HF_VOCODER_ID).to(DEVICE)
-        emb = _fetch_speaker_embedding()
-        # assign all at once so a partial failure doesn't leave _model set but _speaker_embeddings None
-        _processor, _model, _vocoder, _speaker_embeddings = proc, mdl, voc, emb
-        logger.info("SpeechT5 components loaded on %s", DEVICE)
+        _processor, _model, _vocoder = proc, mdl, voc
+        logger.info("SpeechT5 model loaded on %s", DEVICE)
+    if _speaker_embeddings is None:
+        _speaker_embeddings = _fetch_speaker_embedding()
+        logger.info("Speaker embeddings loaded")
     return _processor, _model, _vocoder, _speaker_embeddings
+
+
+def _generate_with_retry(model, input_ids, speaker_embeddings, vocoder):
+    # transformers' SpeechT5 _generate_speech has an off-by-one between the
+    # spectrogram and postnet residual on some text/speaker combos. Retrying
+    # with a tighter maxlenratio dodges most cases.
+    for ratio in (20.0, 12.0, 8.0):
+        try:
+            return model.generate_speech(
+                input_ids, speaker_embeddings, vocoder=vocoder, maxlenratio=ratio
+            )
+        except RuntimeError as e:
+            if "must match the size of tensor" not in str(e):
+                raise
+    return None
 
 
 def synthesize_tts_audio(text: str) -> AudioSegment | None:
@@ -99,9 +116,12 @@ def synthesize_tts_audio(text: str) -> AudioSegment | None:
         processor, model, vocoder, speaker_embeddings = _get_tts_components()
         inputs = processor(text=text, return_tensors="pt").to(DEVICE)
         with torch.no_grad():
-            speech = model.generate_speech(
-                inputs["input_ids"], speaker_embeddings, vocoder=vocoder
+            speech = _generate_with_retry(
+                model, inputs["input_ids"], speaker_embeddings, vocoder
             )
+        if speech is None:
+            logger.warning("SpeechT5 retries exhausted for '%.60s'", text)
+            return None
         # SpeechT5 outputs float32 in [-1, 1] at 16 kHz mono
         pcm16 = (speech.cpu().numpy() * 32767).clip(-32768, 32767).astype(np.int16)
         return AudioSegment(
