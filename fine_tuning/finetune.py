@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -47,6 +48,10 @@ LOGGING_STEPS = 25
 DATALOADER_NUM_WORKERS = 2
 
 CANDIDATES = ("synthetic", "phonetic", "combined")
+
+DRY_RUN_TRAIN_SAMPLES = 8
+DRY_RUN_EVAL_SAMPLES = 4
+DRY_RUN_MAX_STEPS = 2
 
 
 @dataclass
@@ -190,25 +195,30 @@ def _build_trainer(
     output_dir: Path,
     max_steps: int,
     warmup_steps: int,
+    dry_run: bool = False,
 ) -> Seq2SeqTrainer:
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
         processor=processor,
         decoder_start_token_id=model.config.decoder_start_token_id,
     )
+    batch_size = 2 if dry_run else PER_DEVICE_TRAIN_BATCH_SIZE
+    eval_batch_size = 2 if dry_run else PER_DEVICE_EVAL_BATCH_SIZE
+    grad_accum = 1 if dry_run else GRADIENT_ACCUMULATION_STEPS
+    eval_save_steps = 1 if dry_run else max(1, max_steps // 6)
     args = Seq2SeqTrainingArguments(
         output_dir=str(output_dir),
-        per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
-        per_device_eval_batch_size=PER_DEVICE_EVAL_BATCH_SIZE,
-        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=eval_batch_size,
+        gradient_accumulation_steps=grad_accum,
         gradient_checkpointing=True,
         learning_rate=LEARNING_RATE,
         warmup_steps=warmup_steps,
         max_steps=max_steps,
         fp16=True,
         eval_strategy="steps",
-        eval_steps=max_steps // 6,
+        eval_steps=eval_save_steps,
         save_strategy="steps",
-        save_steps=max_steps // 6,
+        save_steps=eval_save_steps,
         save_total_limit=3,
         logging_steps=LOGGING_STEPS,
         report_to=["tensorboard"],
@@ -246,6 +256,7 @@ def run_finetuning(
     model_output_dir: Path = MODEL_OUTPUT_DIR,
     candidate: str = "all",
     resume_from_checkpoint: Optional[str] = None,
+    dry_run: bool = False,
 ) -> None:
     if candidate != "all" and candidate not in CANDIDATES:
         raise ValueError(f"--candidate must be one of {('all',) + CANDIDATES}, got '{candidate}'")
@@ -253,8 +264,15 @@ def run_finetuning(
     logger.info("Loading processor from %s", BASE_MODEL)
     processor = WhisperProcessor.from_pretrained(BASE_MODEL, language=LANGUAGE, task=TASK)
 
+    if dry_run:
+        logger.info("DRY RUN: using %d train / %d eval samples, %d steps",
+                    DRY_RUN_TRAIN_SAMPLES, DRY_RUN_EVAL_SAMPLES, DRY_RUN_MAX_STEPS)
+
     logger.info("Loading datasets from %s", output_root)
     eval_raw, synth_train_raw, phonetic_train_raw, combined_train_raw = load_candidate_datasets(output_root)
+
+    if dry_run:
+        eval_raw = eval_raw.select(range(min(DRY_RUN_EVAL_SAMPLES, len(eval_raw))))
 
     # Preprocess eval once; all three candidates share it
     eval_ds = _preprocess(processor, eval_raw, desc="Preprocessing eval")
@@ -270,6 +288,8 @@ def run_finetuning(
 
     for name in to_run:
         train_raw = candidate_data[name]
+        if dry_run:
+            train_raw = train_raw.select(range(min(DRY_RUN_TRAIN_SAMPLES, len(train_raw))))
         if len(train_raw) == 0:
             logger.warning("Candidate '%s' has no training data — skipping", name)
             results[name] = None
@@ -281,19 +301,26 @@ def run_finetuning(
             name, len(train_raw), out_dir,
         )
 
+        max_steps = DRY_RUN_MAX_STEPS if dry_run else CANDIDATE_MAX_STEPS
+        warmup = 0 if dry_run else WARMUP_STEPS
         train_ds = _preprocess(processor, train_raw, desc=f"Preprocessing {name} train")
         model = _fresh_model()
         trainer = _build_trainer(
             model, processor, train_ds, eval_ds,
             output_dir=out_dir,
-            max_steps=CANDIDATE_MAX_STEPS,
-            warmup_steps=WARMUP_STEPS,
+            max_steps=max_steps,
+            warmup_steps=warmup,
+            dry_run=dry_run,
         )
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         trainer.save_model()
         processor.save_pretrained(str(out_dir))
         results[name] = trainer.state.best_metric
         logger.info("Candidate '%s' best WER: %.2f%%", name, results[name] or 0.0)
+
+        if dry_run:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            logger.info("Dry run: deleted %s", out_dir)
 
     logger.info(
         "Results — synthetic: %s | phonetic: %s | combined: %s",
@@ -321,6 +348,11 @@ if __name__ == "__main__":
         default=None,
         help="Checkpoint path to resume from (only meaningful with --candidate <single>)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=f"Run on {DRY_RUN_TRAIN_SAMPLES} train / {DRY_RUN_EVAL_SAMPLES} eval samples for {DRY_RUN_MAX_STEPS} steps, then delete output",
+    )
     args = parser.parse_args()
 
     run_finetuning(
@@ -328,4 +360,5 @@ if __name__ == "__main__":
         model_output_dir=args.model_output_dir,
         candidate=args.candidate,
         resume_from_checkpoint=args.resume_from_checkpoint,
+        dry_run=args.dry_run,
     )
