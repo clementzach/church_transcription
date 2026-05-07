@@ -34,7 +34,23 @@ LANGUAGE_CODE = "ht"
 TASK = "transcribe"
 SAMPLING_RATE = 16_000
 
-N_EVAL_TALKS = 10  # number of real-speech talks held out for evaluation
+EVAL_TALK_IDS = frozenset({
+    "2012_10_Nourise_a",
+    "2021_10_Diyite_Pa_Vledi_Nou_Pafe",
+    "2021_4_Kisa_Sove_nou_an_te_fe_pou_nou",
+    "2021_10_Lanmou_Bondye_Sa_ki_bay_nanm_lan_plis_lajwa",
+    "2012_10_Bon_Dezi_pou_Angaje",
+    "2012_10_Eprev_lafwa_nou",
+    "2015_4_Prezidan_Dieter_F_Uchtdorf",
+    "2019_10_Bay_Espri_nou_Kontwol_Sou_Ko_nou",
+    "2021_4_Chemen_alyans_lan",
+    "2019_4_Jan_l_te_fe_a",
+    "2014_4_Fotifye_nou_e_pran_kouraj",
+    "2021_4_Bondye_Nan_Mitan_Nou",
+    "2018_10_Vin_tounen_Sen_Denye_Jou_Egzanple",
+    "2015_10_Elde_Quentin_L_Cook",
+    "2012_4_Rapo_Depatman_Odit_Legliz_la_2011",
+})
 
 # Tuned for L4 (24 GB VRAM), 16 GB RAM, 4 vCPUs
 # Effective batch size = 16 * 2 = 32
@@ -122,8 +138,7 @@ def load_candidate_datasets(output_root: Path) -> tuple[Dataset, Dataset, Datase
     if len(phonetic_full) == 0:
         raise RuntimeError("No phonetic-alignment data found in metadata.jsonl")
 
-    all_talk_ids = sorted({_extract_talk_id(fn) for fn in phonetic_full["file_name"]})
-    eval_talk_ids = set(all_talk_ids[:N_EVAL_TALKS])
+    eval_talk_ids = EVAL_TALK_IDS
     logger.info("Eval talks (%d): %s", len(eval_talk_ids), sorted(eval_talk_ids))
 
     eval_ds = phonetic_full.filter(
@@ -164,7 +179,8 @@ def make_prepare_fn(processor: WhisperProcessor):
 
 
 def make_compute_metrics(processor: WhisperProcessor):
-    metric = evaluate.load("wer")
+    wer_metric = evaluate.load("wer")
+    cer_metric = evaluate.load("cer")
 
     def compute_metrics(pred):
         pred_ids = pred.predictions
@@ -172,7 +188,10 @@ def make_compute_metrics(processor: WhisperProcessor):
         label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
         pred_str = processor.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         label_str = processor.tokenizer.batch_decode(label_ids, skip_special_tokens=True)
-        return {"wer": 100 * metric.compute(predictions=pred_str, references=label_str)}
+        return {
+            "wer": 100 * wer_metric.compute(predictions=pred_str, references=label_str),
+            "cer": 100 * cer_metric.compute(predictions=pred_str, references=label_str),
+        }
 
     return compute_metrics
 
@@ -214,7 +233,9 @@ def _build_trainer(
         learning_rate=LEARNING_RATE,
         warmup_steps=warmup_steps,
         max_steps=max_steps,
-        fp16=True,
+        fp16=False,
+        bf16=True,
+        lr_scheduler_type="cosine",
         eval_strategy="steps",
         eval_steps=eval_save_steps,
         save_strategy="steps",
