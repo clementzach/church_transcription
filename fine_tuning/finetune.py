@@ -205,14 +205,22 @@ def make_compute_metrics(processor: WhisperProcessor):
     return compute_metrics
 
 
+MAX_LABEL_LENGTH = 448  # Whisper's hard decoder token limit
+
 def _preprocess(processor, ds: Dataset, desc: str) -> Dataset:
     prepare_fn = make_prepare_fn(processor)
-    return ds.map(
+    ds = ds.map(
         prepare_fn,
         remove_columns=ds.column_names,
         writer_batch_size=100,
         desc=desc,
     )
+    before = len(ds)
+    ds = ds.filter(lambda x: len(x["labels"]) <= MAX_LABEL_LENGTH)
+    dropped = before - len(ds)
+    if dropped:
+        logger.warning("Dropped %d / %d samples exceeding %d-token label limit", dropped, before, MAX_LABEL_LENGTH)
+    return ds
 
 
 def _build_trainer(
@@ -273,7 +281,7 @@ def _build_trainer(
 
 
 def _fresh_model(base_model: str, freeze_encoder: bool = False) -> WhisperForConditionalGeneration:
-    model = WhisperForConditionalGeneration.from_pretrained(base_model)
+    model = WhisperForConditionalGeneration.from_pretrained(base_model,  torch_dtype=torch.float32)
     model.config.use_cache = False
     model.generation_config.language = LANGUAGE_CODE
     model.generation_config.task = TASK
@@ -293,7 +301,9 @@ def _evaluate_checkpoint(
 ) -> dict[str, float | None]:
     """Evaluate any saved checkpoint (or the base model) on the preprocessed eval set."""
     try:
-        model = WhisperForConditionalGeneration.from_pretrained(model_path_or_name)
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_path_or_name,  torch_dtype=torch.float32
+        )
         model.config.use_cache = False
         model.generation_config.language = LANGUAGE_CODE
         model.generation_config.task = TASK
