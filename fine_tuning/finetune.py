@@ -201,7 +201,7 @@ def _preprocess(processor, ds: Dataset, desc: str) -> Dataset:
     return ds.map(
         prepare_fn,
         remove_columns=ds.column_names,
-        num_proc=1,
+        writer_batch_size=100,
         desc=desc,
     )
 
@@ -263,13 +263,60 @@ def _build_trainer(
     )
 
 
-def _fresh_model() -> WhisperForConditionalGeneration:
+def _fresh_model(freeze_encoder: bool = False) -> WhisperForConditionalGeneration:
     model = WhisperForConditionalGeneration.from_pretrained(BASE_MODEL)
     model.config.use_cache = False
     model.generation_config.language = LANGUAGE_CODE
     model.generation_config.task = TASK
     model.generation_config.forced_decoder_ids = None
+    if freeze_encoder:
+        for param in model.model.encoder.parameters():
+            param.requires_grad = False
+        logger.info("Encoder frozen — training decoder only")
     return model
+
+
+def _evaluate_checkpoint(
+    model_path_or_name: str,
+    processor: WhisperProcessor,
+    eval_ds: Dataset,
+    tmp_dir: Path,
+) -> dict[str, float | None]:
+    """Evaluate any saved checkpoint (or the base model) on the preprocessed eval set."""
+    try:
+        model = WhisperForConditionalGeneration.from_pretrained(model_path_or_name)
+        model.config.use_cache = False
+        model.generation_config.language = LANGUAGE_CODE
+        model.generation_config.task = TASK
+        model.generation_config.forced_decoder_ids = None
+        data_collator = DataCollatorSpeechSeq2SeqWithPadding(
+            processor=processor,
+            decoder_start_token_id=model.config.decoder_start_token_id,
+        )
+        args = Seq2SeqTrainingArguments(
+            output_dir=str(tmp_dir),
+            per_device_eval_batch_size=PER_DEVICE_EVAL_BATCH_SIZE,
+            predict_with_generate=True,
+            generation_max_length=225,
+            bf16=True,
+            report_to=[],
+        )
+        trainer = Seq2SeqTrainer(
+            model=model,
+            args=args,
+            eval_dataset=eval_ds,
+            data_collator=data_collator,
+            compute_metrics=make_compute_metrics(processor),
+            processing_class=processor.feature_extractor,
+        )
+        metrics = trainer.evaluate()
+        return {
+            "wer": metrics.get("eval_wer"),
+            "cer": metrics.get("eval_cer"),
+        }
+    except Exception as e:
+        logger.warning("Failed to evaluate %s: %s", model_path_or_name, e)
+        return {"wer": None, "cer": None}
 
 
 def run_finetuning(
@@ -278,6 +325,7 @@ def run_finetuning(
     candidate: str = "all",
     resume_from_checkpoint: Optional[str] = None,
     dry_run: bool = False,
+    freeze_encoder: bool = False,
 ) -> None:
     if candidate != "all" and candidate not in CANDIDATES:
         raise ValueError(f"--candidate must be one of {('all',) + CANDIDATES}, got '{candidate}'")
@@ -316,7 +364,8 @@ def run_finetuning(
             results[name] = None
             continue
 
-        out_dir = model_output_dir / f"candidate_{name}"
+        suffix = "_frozen" if freeze_encoder else ""
+        out_dir = model_output_dir / f"candidate_{name}{suffix}"
         logger.info(
             "Training candidate '%s' on %d samples → %s",
             name, len(train_raw), out_dir,
@@ -325,7 +374,7 @@ def run_finetuning(
         max_steps = DRY_RUN_MAX_STEPS if dry_run else CANDIDATE_MAX_STEPS
         warmup = 0 if dry_run else WARMUP_STEPS
         train_ds = _preprocess(processor, train_raw, desc=f"Preprocessing {name} train")
-        model = _fresh_model()
+        model = _fresh_model(freeze_encoder=freeze_encoder)
         trainer = _build_trainer(
             model, processor, train_ds, eval_ds,
             output_dir=out_dir,
@@ -343,12 +392,35 @@ def run_finetuning(
             shutil.rmtree(out_dir, ignore_errors=True)
             logger.info("Dry run: deleted %s", out_dir)
 
-    logger.info(
-        "Results — synthetic: %s | phonetic: %s | combined: %s",
-        f"{results.get('synthetic'):.2f}%" if results.get("synthetic") is not None else "skipped",
-        f"{results.get('phonetic'):.2f}%" if results.get("phonetic") is not None else "skipped",
-        f"{results.get('combined'):.2f}%" if results.get("combined") is not None else "skipped",
+    if dry_run:
+        return
+
+    # Collect base model + every saved candidate under model_output_dir
+    to_compare: dict[str, str] = {"base (no fine-tuning)": BASE_MODEL}
+    for candidate_dir in sorted(model_output_dir.glob("candidate_*")):
+        if (candidate_dir / "config.json").exists():
+            to_compare[candidate_dir.name] = str(candidate_dir)
+
+    logger.info("Running comparison eval on %d models...", len(to_compare))
+    tmp_dir = model_output_dir / "_eval_tmp"
+    comparison: dict[str, dict[str, float | None]] = {}
+    for label, path in to_compare.items():
+        logger.info("  Evaluating: %s", label)
+        comparison[label] = _evaluate_checkpoint(path, processor, eval_ds, tmp_dir)
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    sorted_results = sorted(
+        comparison.items(),
+        key=lambda x: x[1]["wer"] if x[1]["wer"] is not None else float("inf"),
     )
+    logger.info("=" * 65)
+    logger.info("%-42s  %8s  %8s", "Model", "WER", "CER")
+    logger.info("-" * 65)
+    for label, metrics in sorted_results:
+        wer = f"{metrics['wer']:.2f}%" if metrics["wer"] is not None else "failed"
+        cer = f"{metrics['cer']:.2f}%" if metrics["cer"] is not None else "failed"
+        logger.info("%-42s  %8s  %8s", label, wer, cer)
+    logger.info("=" * 65)
 
 
 if __name__ == "__main__":
@@ -374,6 +446,11 @@ if __name__ == "__main__":
         action="store_true",
         help=f"Run on {DRY_RUN_TRAIN_SAMPLES} train / {DRY_RUN_EVAL_SAMPLES} eval samples for {DRY_RUN_MAX_STEPS} steps, then delete output",
     )
+    parser.add_argument(
+        "--freeze-encoder",
+        action="store_true",
+        help="Freeze encoder weights and train decoder only (faster, less risk of catastrophic forgetting)",
+    )
     args = parser.parse_args()
 
     run_finetuning(
@@ -382,4 +459,5 @@ if __name__ == "__main__":
         candidate=args.candidate,
         resume_from_checkpoint=args.resume_from_checkpoint,
         dry_run=args.dry_run,
+        freeze_encoder=args.freeze_encoder,
     )
