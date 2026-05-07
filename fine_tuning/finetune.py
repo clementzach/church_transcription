@@ -26,9 +26,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 REPO_ROOT = Path(__file__).parent.parent
 OUTPUT_ROOT = REPO_ROOT / "fine_tuning" / "output"
-MODEL_OUTPUT_DIR = REPO_ROOT / "fine_tuning" / "whisper-small-ht"
 
-BASE_MODEL = "openai/whisper-small"
+MODEL_SIZES = {
+    "small": "openai/whisper-small",
+    "medium": "openai/whisper-medium",
+    "large": "openai/whisper-large-v3",
+}
+MODEL_OUTPUT_DIRS = {
+    "small":  REPO_ROOT / "fine_tuning" / "whisper-small-ht",
+    "medium": REPO_ROOT / "fine_tuning" / "whisper-medium-ht",
+    "large":  REPO_ROOT / "fine_tuning" / "whisper-large-v3-ht",
+}
+
 LANGUAGE = "Haitian Creole"
 LANGUAGE_CODE = "ht"
 TASK = "transcribe"
@@ -263,8 +272,8 @@ def _build_trainer(
     )
 
 
-def _fresh_model(freeze_encoder: bool = False) -> WhisperForConditionalGeneration:
-    model = WhisperForConditionalGeneration.from_pretrained(BASE_MODEL)
+def _fresh_model(base_model: str, freeze_encoder: bool = False) -> WhisperForConditionalGeneration:
+    model = WhisperForConditionalGeneration.from_pretrained(base_model)
     model.config.use_cache = False
     model.generation_config.language = LANGUAGE_CODE
     model.generation_config.task = TASK
@@ -321,17 +330,24 @@ def _evaluate_checkpoint(
 
 def run_finetuning(
     output_root: Path = OUTPUT_ROOT,
-    model_output_dir: Path = MODEL_OUTPUT_DIR,
+    model_size: str = "small",
+    model_output_dir: Optional[Path] = None,
     candidate: str = "all",
     resume_from_checkpoint: Optional[str] = None,
     dry_run: bool = False,
     freeze_encoder: bool = False,
 ) -> None:
+    if model_size not in MODEL_SIZES:
+        raise ValueError(f"--model-size must be one of {tuple(MODEL_SIZES)}, got '{model_size}'")
     if candidate != "all" and candidate not in CANDIDATES:
         raise ValueError(f"--candidate must be one of {('all',) + CANDIDATES}, got '{candidate}'")
 
-    logger.info("Loading processor from %s", BASE_MODEL)
-    processor = WhisperProcessor.from_pretrained(BASE_MODEL, language=LANGUAGE, task=TASK)
+    base_model = MODEL_SIZES[model_size]
+    if model_output_dir is None:
+        model_output_dir = MODEL_OUTPUT_DIRS[model_size]
+
+    logger.info("Loading processor from %s", base_model)
+    processor = WhisperProcessor.from_pretrained(base_model, language=LANGUAGE, task=TASK)
 
     if dry_run:
         logger.info("DRY RUN: using %d train / %d eval samples, %d steps",
@@ -364,8 +380,8 @@ def run_finetuning(
             results[name] = None
             continue
 
-        suffix = "_frozen" if freeze_encoder else ""
-        out_dir = model_output_dir / f"candidate_{name}{suffix}"
+        encoder_dir = "frozen" if freeze_encoder else "full"
+        out_dir = model_output_dir / encoder_dir / f"candidate_{name}"
         logger.info(
             "Training candidate '%s' on %d samples → %s",
             name, len(train_raw), out_dir,
@@ -374,7 +390,7 @@ def run_finetuning(
         max_steps = DRY_RUN_MAX_STEPS if dry_run else CANDIDATE_MAX_STEPS
         warmup = 0 if dry_run else WARMUP_STEPS
         train_ds = _preprocess(processor, train_raw, desc=f"Preprocessing {name} train")
-        model = _fresh_model(freeze_encoder=freeze_encoder)
+        model = _fresh_model(base_model=base_model, freeze_encoder=freeze_encoder)
         trainer = _build_trainer(
             model, processor, train_ds, eval_ds,
             output_dir=out_dir,
@@ -395,11 +411,15 @@ def run_finetuning(
     if dry_run:
         return
 
-    # Collect base model + every saved candidate under model_output_dir
-    to_compare: dict[str, str] = {"base (no fine-tuning)": BASE_MODEL}
-    for candidate_dir in sorted(model_output_dir.glob("candidate_*")):
-        if (candidate_dir / "config.json").exists():
-            to_compare[candidate_dir.name] = str(candidate_dir)
+    # Always include all three base model sizes, then every saved candidate across all sizes
+    to_compare: dict[str, str] = {
+        f"base whisper-{size}": model_id for size, model_id in MODEL_SIZES.items()
+    }
+    for size, size_dir in MODEL_OUTPUT_DIRS.items():
+        for candidate_dir in sorted(size_dir.glob("*/candidate_*")):
+            if (candidate_dir / "config.json").exists():
+                label = f"{size}/{candidate_dir.parent.name}/{candidate_dir.name}"
+                to_compare[label] = str(candidate_dir)
 
     logger.info("Running comparison eval on %d models...", len(to_compare))
     tmp_dir = model_output_dir / "_eval_tmp"
@@ -428,7 +448,18 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
-    parser.add_argument("--model-output-dir", type=Path, default=MODEL_OUTPUT_DIR)
+    parser.add_argument(
+        "--model-size",
+        choices=tuple(MODEL_SIZES),
+        default="small",
+        help="Which Whisper model to fine-tune (default: small)",
+    )
+    parser.add_argument(
+        "--model-output-dir",
+        type=Path,
+        default=None,
+        help="Override output directory (default: derived from --model-size)",
+    )
     parser.add_argument(
         "--candidate",
         choices=("all",) + CANDIDATES,
@@ -455,6 +486,7 @@ if __name__ == "__main__":
 
     run_finetuning(
         output_root=args.output_root,
+        model_size=args.model_size,
         model_output_dir=args.model_output_dir,
         candidate=args.candidate,
         resume_from_checkpoint=args.resume_from_checkpoint,
