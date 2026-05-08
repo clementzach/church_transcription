@@ -295,21 +295,28 @@ def _fresh_model(base_model: str, freeze_encoder: bool = False) -> WhisperForCon
 
 def _evaluate_checkpoint(
     model_path_or_name: str,
-    processor: WhisperProcessor,
-    eval_ds: Dataset,
+    eval_raw: Dataset,
     tmp_dir: Path,
 ) -> dict[str, float | None]:
-    """Evaluate any saved checkpoint (or the base model) on the preprocessed eval set."""
+    """Evaluate any saved checkpoint (or the base model) on the raw eval set.
+
+    Loads the model's own processor so mel-bin differences across model sizes
+    (80 for small/medium, 128 for large-v3) don't cause shape mismatches.
+    """
     try:
+        eval_processor = WhisperProcessor.from_pretrained(
+            model_path_or_name, language=LANGUAGE, task=TASK
+        )
+        eval_ds = _preprocess(eval_processor, eval_raw, desc=f"eval {Path(model_path_or_name).name}")
         model = WhisperForConditionalGeneration.from_pretrained(
-            model_path_or_name,  torch_dtype=torch.float32
+            model_path_or_name, torch_dtype=torch.float32
         )
         model.config.use_cache = False
         model.generation_config.language = LANGUAGE_CODE
         model.generation_config.task = TASK
         model.generation_config.forced_decoder_ids = None
         data_collator = DataCollatorSpeechSeq2SeqWithPadding(
-            processor=processor,
+            processor=eval_processor,
             decoder_start_token_id=model.config.decoder_start_token_id,
         )
         args = Seq2SeqTrainingArguments(
@@ -325,8 +332,8 @@ def _evaluate_checkpoint(
             args=args,
             eval_dataset=eval_ds,
             data_collator=data_collator,
-            compute_metrics=make_compute_metrics(processor),
-            processing_class=processor.feature_extractor,
+            compute_metrics=make_compute_metrics(eval_processor),
+            processing_class=eval_processor.feature_extractor,
         )
         metrics = trainer.evaluate()
         return {
@@ -436,7 +443,7 @@ def run_finetuning(
     comparison: dict[str, dict[str, float | None]] = {}
     for label, path in to_compare.items():
         logger.info("  Evaluating: %s", label)
-        comparison[label] = _evaluate_checkpoint(path, processor, eval_ds, tmp_dir)
+        comparison[label] = _evaluate_checkpoint(path, eval_raw, tmp_dir)
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
     sorted_results = sorted(
