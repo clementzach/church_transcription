@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 REPO_ROOT = Path(__file__).parent.parent
 OUTPUT_ROOT = REPO_ROOT / "fine_tuning" / "output"
+PREPROCESS_CACHE_DIR = REPO_ROOT / "fine_tuning" / ".preprocess_cache"
 
 MODEL_SIZES = {
     "small": "openai/whisper-small",
@@ -207,7 +208,13 @@ def make_compute_metrics(processor: WhisperProcessor):
 
 MAX_LABEL_LENGTH = 448  # Whisper's hard decoder token limit
 
-def _preprocess(processor, ds: Dataset, desc: str) -> Dataset:
+def _preprocess(processor, ds: Dataset, desc: str, cache_key: Optional[str] = None) -> Dataset:
+    if cache_key:
+        cache_path = PREPROCESS_CACHE_DIR / cache_key
+        if cache_path.exists():
+            logger.info("Cache hit — loading preprocessed '%s' from disk", cache_key)
+            return Dataset.load_from_disk(str(cache_path))
+
     prepare_fn = make_prepare_fn(processor)
     ds = ds.map(
         prepare_fn,
@@ -220,6 +227,13 @@ def _preprocess(processor, ds: Dataset, desc: str) -> Dataset:
     dropped = before - len(ds)
     if dropped:
         logger.warning("Dropped %d / %d samples exceeding %d-token label limit", dropped, before, MAX_LABEL_LENGTH)
+
+    if cache_key:
+        cache_path = PREPROCESS_CACHE_DIR / cache_key
+        cache_path.mkdir(parents=True, exist_ok=True)
+        ds.save_to_disk(str(cache_path))
+        logger.info("Saved preprocessed '%s' to cache", cache_key)
+
     return ds
 
 
@@ -307,7 +321,12 @@ def _evaluate_checkpoint(
         eval_processor = WhisperProcessor.from_pretrained(
             model_path_or_name, language=LANGUAGE, task=TASK
         )
-        eval_ds = _preprocess(eval_processor, eval_raw, desc=f"eval {Path(model_path_or_name).name}")
+        mel_bins = eval_processor.feature_extractor.feature_size
+        eval_ds = _preprocess(
+            eval_processor, eval_raw,
+            desc=f"eval {Path(model_path_or_name).name}",
+            cache_key=f"mel{mel_bins}__eval",
+        )
         model = WhisperForConditionalGeneration.from_pretrained(
             model_path_or_name, torch_dtype=torch.float32
         )
@@ -377,7 +396,8 @@ def run_finetuning(
         eval_raw = eval_raw.select(range(min(DRY_RUN_EVAL_SAMPLES, len(eval_raw))))
 
     # Preprocess eval once; all three candidates share it
-    eval_ds = _preprocess(processor, eval_raw, desc="Preprocessing eval")
+    eval_cache = None if dry_run else f"{model_size}__eval"
+    eval_ds = _preprocess(processor, eval_raw, desc="Preprocessing eval", cache_key=eval_cache)
 
     candidate_data = {
         "synthetic": synth_train_raw,
@@ -406,7 +426,8 @@ def run_finetuning(
 
         max_steps = DRY_RUN_MAX_STEPS if dry_run else CANDIDATE_MAX_STEPS
         warmup = 0 if dry_run else WARMUP_STEPS
-        train_ds = _preprocess(processor, train_raw, desc=f"Preprocessing {name} train")
+        train_cache = None if dry_run else f"{model_size}__train__{name}"
+        train_ds = _preprocess(processor, train_raw, desc=f"Preprocessing {name} train", cache_key=train_cache)
         model = _fresh_model(base_model=base_model, freeze_encoder=freeze_encoder)
         trainer = _build_trainer(
             model, processor, train_ds, eval_ds,
