@@ -7,8 +7,6 @@ import queue
 import string
 import threading
 import time
-import wave
-
 import httpx
 import numpy as np
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -788,17 +786,17 @@ async def stream_local(ws: WebSocket):
         return
 
     with _lock:
-        if session_id not in sessions:
+        session = sessions.get(session_id)
+        if not session:
             log.error("stream_local: unknown session_id=%s", session_id)
             await ws.close()
             return
+        session['broadcaster_connected'] = True
 
     log.info("stream_local: session=%s", session_id)
 
-    loop = asyncio.get_event_loop()
-
     def send_callback(msg):
-        asyncio.run_coroutine_threadsafe(ws.send_text(msg), loop)
+        asyncio.run_coroutine_threadsafe(ws.send_text(msg), _loop)
 
     prev_sentences = []
     prev_lock = threading.Lock()
@@ -867,6 +865,10 @@ async def stream_local(ws: WebSocket):
                 flush()
 
     finally:
+        with _lock:
+            s = sessions.get(session_id)
+            if s is session:
+                session['broadcaster_connected'] = False
         if has_content and sample_buffer:
             flush()
         transcribe_q.put(None)
