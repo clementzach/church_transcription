@@ -787,7 +787,7 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
       // Explicitly end the backend session so init-session won't see an active broadcaster.
       if (sid) {
         try {
-          await fetch('/church_transcription/end-session', {
+          await fetch(BASE + 'end-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sid }),
@@ -1026,7 +1026,7 @@ async function stopSession(userInitiated = true) {
   if (userInitiated) {
     // Free the session code so another broadcaster can reuse it.
     if (currentSessionId) {
-      fetch('/church_transcription/end-session', {
+      fetch(BASE + 'end-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: currentSessionId }),
@@ -1164,8 +1164,8 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
       btn.classList.remove('hidden-panel');
     }
     updateGridLayout();
-    // Notify the server so it only translates visible languages (local HT mode).
-    if (isLocalHt && ws && ws.readyState === WebSocket.OPEN) {
+    // Notify the server of the current visible panels.
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'display_langs', langs: [...visiblePanels] }));
     }
   });

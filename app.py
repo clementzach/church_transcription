@@ -611,6 +611,7 @@ async def stream(ws: WebSocket):
     try:
         first_msg = json.loads(raw_first)
         session_id = first_msg.get('session_id', '')
+        display_langs = [l for l in first_msg.get('display_langs', ALL_LANGS) if l in ALL_LANGS]
     except Exception as e:
         log.error("stream: failed to parse first message: %s", e)
         await ws.close()
@@ -639,6 +640,7 @@ async def stream(ws: WebSocket):
     with _lock:
         if sessions.get(session_id) is session:
             session['broadcaster_connected'] = True
+            session['display_langs'] = display_langs
 
     audio_chunks = 0
     gladia_msgs = 0
@@ -660,6 +662,18 @@ async def stream(ws: WebSocket):
                             if audio_chunks % 50 == 1:
                                 log.info("stream/forward_audio: relayed %d audio chunks", audio_chunks)
                             await gladia_ws.send(msg_bytes)
+                            continue
+                        msg_text = data.get('text')
+                        if msg_text:
+                            try:
+                                ctrl = json.loads(msg_text)
+                                if ctrl.get('type') == 'display_langs':
+                                    langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
+                                    with _lock:
+                                        if sessions.get(session_id) is session:
+                                            session['display_langs'] = langs
+                            except Exception:
+                                pass
                 except WebSocketDisconnect:
                     log.info("stream/browser_to_gladia: browser closed connection")
                 except Exception as e:
