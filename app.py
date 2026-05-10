@@ -48,7 +48,7 @@ if LOCAL_HAITIAN_PATH:
     try:
         from faster_whisper import WhisperModel
         _local_whisper_model = WhisperModel(
-            LOCAL_HAITIAN_PATH, device='cpu', compute_type='int8'
+            LOCAL_HAITIAN_PATH, device='cuda', compute_type='float16'
         )
         log.info("Loaded local HT Whisper model from %s", LOCAL_HAITIAN_PATH)
     except Exception as _e:

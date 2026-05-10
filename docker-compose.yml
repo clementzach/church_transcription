@@ -3,12 +3,17 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
-    # Mount local model directory into the container.
-    # Set LOCAL_HAITIAN_PATH=/app/models/<model-name> in .env.
     volumes:
       - ./models:/app/models:ro
     expose:
       - "5001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   nginx:
     image: nginx:alpine

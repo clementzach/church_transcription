@@ -11,6 +11,7 @@ anthropic
 pydub
 faster-whisper
 numpy
+audiomentations
 torch
 transformers
 datasets
