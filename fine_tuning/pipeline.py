@@ -63,7 +63,7 @@ def _get_whisper_model() -> WhisperModel:
 def _get_google_client() -> google_genai.Client:
     global _google_client
     if _google_client is None:
-        _google_client = google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        _google_client = google_genai.Client(api_key=os.getenv("GOOGLE_LLM_API_KEY"))
     return _google_client
 
 

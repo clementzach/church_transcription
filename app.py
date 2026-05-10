@@ -35,7 +35,7 @@ GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 # discovery, which otherwise hangs ~30s on non-GCE machines trying to reach
 # the GCE metadata server.
 _tts_client = _texttospeech.TextToSpeechClient(
-    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_API_KEY"))
+    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_TTS_API_KEY"))
 )
 
 ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
