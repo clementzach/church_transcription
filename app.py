@@ -57,7 +57,8 @@ if LOCAL_HAITIAN_PATH:
 if TTS_PROVIDER == 'google' or LOCAL_HAITIAN_PATH:
     from google import genai as _google_genai
     from google.genai import types as _google_types
-    google_client = _google_genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    google_tts_client = _google_genai.Client(api_key=os.getenv("GOOGLE_TTS_API_KEY"))
+    google_llm_client = _google_genai.Client(api_key=os.getenv("GOOGLE_LLM_API_KEY"))
 
 # ── Local HT audio chunking constants ─────────────────────────────────────
 _WHISPER_SR = 16000
@@ -144,7 +145,7 @@ def _tts_generate_audio(lang, text):
         return response.content, 'audio/mpeg'
 
     # Google Gemini 2.5 Flash TTS
-    response = google_client.models.generate_content(
+    response = google_tts_client.models.generate_content(
         model='gemini-2.5-flash-preview-tts',
         contents=text,
         config=_google_types.GenerateContentConfig(
@@ -187,7 +188,7 @@ def _translate_ht_to(ht_text, target_lang, prev_sentences):
         "Output only the translation with no explanation:\n" + ht_text
     )
 
-    resp = google_client.models.generate_content(
+    resp = google_llm_client.models.generate_content(
         model='gemini-2.5-flash',
         contents=prompt,
     )
