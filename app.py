@@ -602,13 +602,8 @@ async def end_session(request: Request):
 async def stream(ws: WebSocket):
     await ws.accept()
 
-    # First message from browser: JSON with session_id only.
     try:
         raw_first = await ws.receive_text()
-    except WebSocketDisconnect:
-        return
-
-    try:
         first_msg = json.loads(raw_first)
         session_id = first_msg.get('session_id', '')
         display_langs = [l for l in first_msg.get('display_langs', ALL_LANGS) if l in ALL_LANGS]
@@ -629,18 +624,108 @@ async def stream(ws: WebSocket):
         await ws.close()
         return
 
-    gladia_url = session.get('gladia_url', '')
+    with _lock:
+        if sessions.get(session_id) is session:
+            session['broadcaster_connected'] = True
+            session['display_langs'] = display_langs
+
+    if session.get('local_ht'):
+        await _stream_local_ht(ws, session_id, session)
+    else:
+        await _stream_gladia(ws, session_id, session)
+
+
+async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict):
+    """Handle the local Haitian Creole Whisper transcription path."""
+    log.info("stream: session=%s (local HT)", session_id)
+
+    def send_callback(msg):
+        asyncio.run_coroutine_threadsafe(ws.send_text(msg), _loop)
+
+    prev_sentences = []
+    prev_lock = threading.Lock()
+    transcribe_q = queue.Queue()
+    state = {'text_buffer': ''}
+
+    def transcription_worker():
+        while True:
+            audio_np = transcribe_q.get()
+            if audio_np is None:
+                break
+            with prev_lock:
+                prev = list(prev_sentences)
+            ht_text, state['text_buffer'] = _transcribe_and_broadcast_ht(
+                session_id, audio_np, state['text_buffer'], prev, send_callback
+            )
+            if ht_text:
+                with prev_lock:
+                    prev_sentences.append(ht_text)
+                    if len(prev_sentences) > 2:
+                        del prev_sentences[:-2]
+
+    worker = threading.Thread(target=transcription_worker, daemon=True)
+    worker.start()
+
+    sample_buffer = []
+
+    def flush():
+        nonlocal sample_buffer
+        if not sample_buffer:
+            return
+        audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
+        sample_buffer = []
+        transcribe_q.put(audio_np)
+
+    try:
+        while True:
+            try:
+                data = await ws.receive()
+            except WebSocketDisconnect:
+                break
+            if data['type'] == 'websocket.disconnect':
+                break
+            msg_bytes = data.get('bytes')
+            if not msg_bytes:
+                msg_text = data.get('text')
+                if msg_text:
+                    try:
+                        ctrl = json.loads(msg_text)
+                        if ctrl.get('type') == 'display_langs':
+                            langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
+                            with _lock:
+                                if sessions.get(session_id) is session:
+                                    session['display_langs'] = langs
+                    except Exception:
+                        pass
+                continue
+
+            chunk_int16 = np.frombuffer(msg_bytes, dtype=np.int16)
+            if len(chunk_int16) == 0:
+                continue
+            sample_buffer.append(chunk_int16)
+            if sum(len(b) for b in sample_buffer) >= _MAX_CHUNK_SAMPLES:
+                flush()
+
+    finally:
+        with _lock:
+            if sessions.get(session_id) is session:
+                session['broadcaster_connected'] = False
+        flush()
+        transcribe_q.put(None)
+        worker.join(timeout=30)
+        log.info("stream: local HT closed session=%s", session_id)
+
+
+async def _stream_gladia(ws: WebSocket, session_id: str, session: dict):
+    """Handle the Gladia transcription/translation path."""
     src_lang = session.get('src_lang', 'auto')
+    gladia_url = session.get('gladia_url', '')
     if not gladia_url or not gladia_url.startswith("wss://"):
         log.error("stream: invalid or missing Gladia URL in session: %r", gladia_url)
         await ws.close()
         return
 
     log.info("stream: session=%s src_lang=%s connecting to Gladia at %s", session_id, src_lang, gladia_url)
-    with _lock:
-        if sessions.get(session_id) is session:
-            session['broadcaster_connected'] = True
-            session['display_langs'] = display_langs
 
     audio_chunks = 0
     gladia_msgs = 0
@@ -686,9 +771,6 @@ async def stream(ws: WebSocket):
                         gladia_msgs += 1
                         msg_type = None
 
-                        # Parse, filter text fields, then forward to browser.
-                        # Filtering here means both the recorder display and
-                        # listeners see clean text.
                         to_send = raw
                         try:
                             msg = json.loads(raw)
@@ -700,8 +782,6 @@ async def stream(ws: WebSocket):
                                 if utterance.get('text'):
                                     utterance['text'] = _filter_text(utterance['text'])
                                     to_send = json.dumps(msg)
-                                # English TTS comes from transcripts when source is English.
-                                # In auto/non-English-source mode it comes from translation msgs.
                                 if src_lang == 'en':
                                     is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
                                     if is_final and utterance.get('text'):
@@ -718,9 +798,8 @@ async def stream(ws: WebSocket):
                                 if lang in ALL_LANGS and text:
                                     _enqueue_tts(session_id, lang, text)
                         except Exception:
-                            pass  # on any parse error, forward the original raw message
+                            pass
 
-                        # Log data messages throttled; always log everything else.
                         if msg_type in ('transcript', 'translation'):
                             if gladia_msgs <= 5 or gladia_msgs % 20 == 0:
                                 log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
@@ -834,117 +913,6 @@ async def listen_stream(ws: WebSocket):
                     log.info("listen-stream: removed listener for session=%s lang=%s", session_id, lang)
                 except ValueError:
                     pass
-
-
-@app.websocket("/stream-local")
-async def stream_local(ws: WebSocket):
-    """WebSocket endpoint for local Haitian Creole Whisper transcription.
-
-    Accumulates PCM audio (int16, 16 kHz, mono), splits on 800 ms silence or
-    30 s max, then transcribes with the local Whisper model and translates to
-    all other languages via Gemini.
-    """
-    await ws.accept()
-
-    try:
-        raw_first = await ws.receive_text()
-        first_msg = json.loads(raw_first)
-        session_id = first_msg.get('session_id', '')
-        display_langs = [l for l in first_msg.get('display_langs', ALL_LANGS) if l in ALL_LANGS]
-    except Exception:
-        await ws.close()
-        return
-
-    with _lock:
-        session = sessions.get(session_id)
-        if not session:
-            log.error("stream_local: unknown session_id=%s", session_id)
-            await ws.close()
-            return
-        session['broadcaster_connected'] = True
-        session['display_langs'] = display_langs
-
-    log.info("stream_local: session=%s", session_id)
-
-    def send_callback(msg):
-        asyncio.run_coroutine_threadsafe(ws.send_text(msg), _loop)
-
-    prev_sentences = []
-    prev_lock = threading.Lock()
-    transcribe_q = queue.Queue()
-    state = {'text_buffer': ''}  # mutable so transcription_worker can update it
-
-    def transcription_worker():
-        while True:
-            audio_np = transcribe_q.get()
-            if audio_np is None:
-                break
-            with prev_lock:
-                prev = list(prev_sentences)
-            ht_text, state['text_buffer'] = _transcribe_and_broadcast_ht(
-                session_id, audio_np, state['text_buffer'], prev, send_callback
-            )
-            if ht_text:
-                with prev_lock:
-                    prev_sentences.append(ht_text)
-                    if len(prev_sentences) > 2:
-                        del prev_sentences[:-2]
-
-    worker = threading.Thread(target=transcription_worker, daemon=True)
-    worker.start()
-
-    # Accumulate raw int16 samples; faster-whisper VAD handles silence internally.
-    sample_buffer = []
-
-    def flush():
-        nonlocal sample_buffer
-        if not sample_buffer:
-            return
-        audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
-        sample_buffer = []
-        transcribe_q.put(audio_np)
-
-    try:
-        while True:
-            try:
-                data = await ws.receive()
-            except WebSocketDisconnect:
-                break
-            if data['type'] == 'websocket.disconnect':
-                break
-            msg_bytes = data.get('bytes')
-            if not msg_bytes:
-                # May be a text control message (e.g. display_langs update).
-                msg_text = data.get('text')
-                if msg_text:
-                    try:
-                        ctrl = json.loads(msg_text)
-                        if ctrl.get('type') == 'display_langs':
-                            langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
-                            with _lock:
-                                if sessions.get(session_id) is session:
-                                    session['display_langs'] = langs
-                    except Exception:
-                        pass
-                continue
-
-            chunk_int16 = np.frombuffer(msg_bytes, dtype=np.int16)
-            if len(chunk_int16) == 0:
-                continue
-            sample_buffer.append(chunk_int16)
-
-            if sum(len(b) for b in sample_buffer) >= _MAX_CHUNK_SAMPLES:
-                flush()
-
-    finally:
-        with _lock:
-            s = sessions.get(session_id)
-            if s is session:
-                session['broadcaster_connected'] = False
-        flush()
-        transcribe_q.put(None)
-        worker.join(timeout=30)
-        log.info("stream_local: closed session=%s", session_id)
 
 
 if __name__ == "__main__":

@@ -934,8 +934,7 @@ async function startSession() {
   const code = sessionCodeInput.value.trim();
   if (code.length !== 6) return;
 
-  // Init session (backend decides whether to use Gladia or local Whisper)
-  let isLocalHt = false;
+  // Init session
   try {
     const resp = await fetch(BASE + 'init-session', {
       method: 'POST',
@@ -948,7 +947,6 @@ async function startSession() {
       alert(data.error || `Failed to start session (${resp.status})`);
       return;
     }
-    isLocalHt = data.local_ht === true;
     currentSessionId = data.session_id;
   } catch (err) {
     alert('Failed to start session: ' + err.message);
@@ -975,14 +973,12 @@ async function startSession() {
   statusDot.classList.add('live');
   clearPanels();
 
-  // Open backend WebSocket (local HT uses a separate endpoint)
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsEndpoint = isLocalHt ? 'stream-local' : 'stream';
-  ws = new WebSocket(`${wsProto}//${location.host}${BASE}${wsEndpoint}`);
+  ws = new WebSocket(`${wsProto}//${location.host}${BASE}stream`);
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', async () => {
-    console.log('[ws] Backend WebSocket open, endpoint=' + wsEndpoint);
+    console.log('[ws] Backend WebSocket open');
     ws.send(JSON.stringify({ session_id: currentSessionId, display_langs: [...visiblePanels] }));
     await startAudio();
   });
