@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    # Mount local model directory into the container.
+    # Set LOCAL_HAITIAN_PATH=/app/models/<model-name> in .env.
+    volumes:
+      - ./models:/app/models:ro
+    expose:
+      - "5001"
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - app
+    restart: unless-stopped
