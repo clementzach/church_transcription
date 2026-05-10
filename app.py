@@ -75,7 +75,7 @@ _TRANSLATION_LANG_NAMES = {
     'no': 'Norwegian',
 }
 
-TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
+TRANSLATION_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
 
 # ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
 OPENAI_TTS_VOICES = {
@@ -97,6 +97,7 @@ OPENAI_TTS_INSTRUCTIONS = {
 
 # ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
 GOOGLE_TTS_VOICES = {
+    'en': 'Puck',
     'es': 'Charon',
     'pt': 'Aoede',
     'ht': 'Kore',
