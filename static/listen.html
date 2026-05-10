@@ -542,6 +542,12 @@
 </div>
 
 <script>
+// ── Base path (works at any subpath or at root) ────────────────────────────
+const BASE = (() => {
+  const p = location.pathname;
+  return p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1);
+})();
+
 // ── State ──────────────────────────────────────────────────────────────────
 const LANG_COLORS = { es: '#f97316', ht: '#22c55e', pt: '#a855f7', zh: '#06b6d4', fr: '#ec4899' };
 const LANG_NAMES  = { es: 'Spanish', ht: 'Haitian Creole', pt: 'Portuguese', zh: 'Mandarin', fr: 'French', no: 'Norwegian' };
@@ -597,7 +603,7 @@ function connect() {
   connectBtn.textContent = 'Connecting…';
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/church_transcription/listen-stream`);
+  ws = new WebSocket(`${proto}//${location.host}${BASE}listen-stream`);
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', () => {

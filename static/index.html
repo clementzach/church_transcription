@@ -492,7 +492,7 @@
       <span id="session-id-label">Session</span>
       <span id="session-id-value">——————</span>
       <button id="copy-session-btn" disabled title="Copy session ID">Copy</button>
-      <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
+      <a id="listener-link" href="listen" target="_blank">Listener ↗</a>
     </div>
 
     <div id="controls">
@@ -584,7 +584,7 @@
 
     <h3>Are you a listener?</h3>
     <ul>
-      <li>This page is for the <strong>broadcaster</strong> (the person running the microphone). If you want to read captions or hear translated audio, go to the <strong><a href="/church_transcription/listen" target="_blank">Listener page ↗</a></strong> instead.</li>
+      <li>This page is for the <strong>broadcaster</strong> (the person running the microphone). If you want to read captions or hear translated audio, go to the <strong><a href="listen" target="_blank">Listener page ↗</a></strong> instead.</li>
     </ul>
 
     <h3>Starting a session</h3>
@@ -631,6 +631,12 @@
 </div>
 
 <script>
+// ── Base path (works at any subpath or at root) ────────────────────────────
+const BASE = (() => {
+  const p = location.pathname;
+  return p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1);
+})();
+
 // ── Constants ──────────────────────────────────────────────────────────────
 const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
 const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
@@ -799,14 +805,13 @@ async function startSession() {
     config.realtime_processing.translation_config.target_languages = ALL_LANGS.filter(l => l !== selectedLang);
   }
 
-  // Init session with Gladia
+  // Init session (backend decides whether to use Gladia or local Whisper)
   let gladiaWsUrl;
+  let isLocalHt = false;
   try {
-    const resp = await fetch('/church_transcription/init-session', {
+    const resp = await fetch(BASE + 'init-session', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
     });
     if (!resp.ok) {
@@ -814,8 +819,11 @@ async function startSession() {
       throw new Error(`Init session failed (${resp.status}): ${text}`);
     }
     const data = await resp.json();
-    gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
-    if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
+    isLocalHt = data.local_ht === true;
+    if (!isLocalHt) {
+      gladiaWsUrl = data.url || data.websocket_url || data.ws_url;
+      if (!gladiaWsUrl) throw new Error('No WebSocket URL in response: ' + JSON.stringify(data));
+    }
     if (data.session_id) { currentSessionId = data.session_id; sessionIdEl.textContent = data.session_id; copySessionBtn.disabled = false; qrBtn.disabled = false; }
   } catch (err) {
     alert('Failed to start session: ' + err.message);
@@ -836,14 +844,19 @@ async function startSession() {
   statusDot.classList.add('live');
   clearPanels();
 
-  // Open backend WebSocket
+  // Open backend WebSocket (local HT uses a separate endpoint)
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
+  const wsEndpoint = isLocalHt ? 'stream-local' : 'stream';
+  ws = new WebSocket(`${wsProto}//${location.host}${BASE}${wsEndpoint}`);
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', async () => {
-    console.log('[ws] Backend WebSocket open');
-    ws.send(JSON.stringify({ url: gladiaWsUrl, session_id: currentSessionId }));
+    console.log('[ws] Backend WebSocket open, endpoint=' + wsEndpoint);
+    if (isLocalHt) {
+      ws.send(JSON.stringify({ session_id: currentSessionId }));
+    } else {
+      ws.send(JSON.stringify({ url: gladiaWsUrl, session_id: currentSessionId }));
+    }
     await startAudio();
   });
 
