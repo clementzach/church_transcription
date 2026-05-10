@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
@@ -58,11 +59,10 @@ if LOCAL_HAITIAN_PATH:
     from google import genai as _google_genai
     google_llm_client = _google_genai.Client(api_key=os.getenv("GOOGLE_LLM_API_KEY"))
 
-# ── Local HT audio chunking constants ─────────────────────────────────────
+# ── Local HT audio chunking / translation constants ───────────────────────
 _WHISPER_SR = 16000
-_MAX_CHUNK_SAMPLES = 30 * _WHISPER_SR
-_SILENCE_MIN_SAMPLES = int(0.8 * _WHISPER_SR)
-_SILENCE_THRESH_RMS = 0.01
+_MAX_CHUNK_SAMPLES = 10 * _WHISPER_SR   # flush audio to Whisper every 10 s max
+_MAX_TRANSLATION_WORDS = 40             # also flush text buffer at this word count
 
 _TRANSLATION_LANG_NAMES = {
     'en': 'English',
@@ -226,57 +226,94 @@ def _translate_ht_to(ht_text, target_lang, prev_sentences):
     return resp.text.strip()
 
 
-def _transcribe_and_broadcast_ht(session_id, audio_np, prev_sentences, send_callback):
-    """Transcribe a float32 audio array with local Whisper, translate to all target
-    languages via Gemini, then push text+TTS to listeners.  Returns the HT text or None."""
+def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentences, send_callback):
+    """Transcribe audio with faster-whisper VAD, buffer text until a sentence boundary
+    or max word count, then translate active languages in parallel.
+
+    Returns (ht_text, updated_text_buffer). ht_text is empty string if Whisper
+    produced nothing; text_buffer carries over across calls until flushed.
+    """
+    chunk_secs = len(audio_np) / _WHISPER_SR
+    t0 = time.time()
     try:
-        segments, _ = _local_whisper_model.transcribe(audio_np, language='ht')
+        segments, _ = _local_whisper_model.transcribe(
+            audio_np, language='ht', vad_filter=True,
+            vad_parameters={'min_silence_duration_ms': 500},
+        )
         ht_text = " ".join(seg.text.strip() for seg in segments).strip()
     except Exception as e:
         log.error("[local_ht:%s] Whisper error: %s", session_id, e)
-        return None
+        return '', text_buffer
+    elapsed = time.time() - t0
+    log.info("[local_ht:%s] chunk=%.1fs whisper=%.2fs text=%.60s",
+             session_id, chunk_secs, elapsed, ht_text or '(empty)')
 
     if not ht_text:
-        return None
+        return '', text_buffer
 
     ht_text = _filter_text(ht_text)
-    log.info("[local_ht:%s] Whisper: %.80s", session_id, ht_text)
 
-    transcript_msg = json.dumps({
-        'type': 'transcript',
-        'data': {'utterance': {'text': ht_text, 'is_final': True, 'language': 'ht'}},
-    })
+    # Send raw HT transcript to broadcaster display immediately.
     try:
-        send_callback(transcript_msg)
+        send_callback(json.dumps({
+            'type': 'transcript',
+            'data': {'utterance': {'text': ht_text, 'is_final': True, 'language': 'ht'}},
+        }))
     except Exception:
         pass
 
+    # HT listeners get audio on every chunk — no need to wait for a full sentence.
     _enqueue_tts(session_id, 'ht', ht_text)
 
-    for lang in ALL_LANGS:
-        if lang == 'ht':
+    # Accumulate into the translation buffer and check for a flush trigger.
+    text_buffer = (text_buffer + ' ' + ht_text).strip()
+    ends_sentence = text_buffer[-1] in '.?!…' if text_buffer else False
+    word_count = len(text_buffer.split())
+
+    if not ends_sentence and word_count < _MAX_TRANSLATION_WORDS:
+        return ht_text, text_buffer
+
+    # Flush: translate the buffered text into every language that has a listener.
+    text_to_translate = text_buffer
+    text_buffer = ''
+
+    with _lock:
+        sess = sessions.get(session_id)
+        active_langs = [
+            lang for lang in ALL_LANGS
+            if lang != 'ht' and sess and sess['listener_registry'].get(lang)
+        ]
+
+    if not active_langs:
+        return ht_text, text_buffer
+
+    def translate_one(lang):
+        try:
+            translated = _translate_ht_to(text_to_translate, lang, prev_sentences)
+            return lang, _filter_text(translated) if translated else None
+        except Exception as e:
+            log.error("[local_ht:%s] Translation to %s failed: %s", session_id, lang, e)
+            return lang, None
+
+    with ThreadPoolExecutor(max_workers=len(active_langs)) as executor:
+        results = list(executor.map(translate_one, active_langs))
+
+    for lang, translated in results:
+        if not translated:
             continue
         try:
-            translated = _translate_ht_to(ht_text, lang, prev_sentences)
-            if not translated:
-                continue
-            translated = _filter_text(translated)
-            translation_msg = json.dumps({
+            send_callback(json.dumps({
                 'type': 'translation',
                 'data': {
                     'target_language': lang,
                     'translated_utterance': {'text': translated},
                 },
-            })
-            try:
-                send_callback(translation_msg)
-            except Exception:
-                pass
-            _enqueue_tts(session_id, lang, translated)
-        except Exception as e:
-            log.error("[local_ht:%s] Translation to %s failed: %s", session_id, lang, e)
+            }))
+        except Exception:
+            pass
+        _enqueue_tts(session_id, lang, translated)
 
-    return ht_text
+    return ht_text, text_buffer
 
 
 def _expire_session(session_id):
@@ -817,6 +854,7 @@ async def stream_local(ws: WebSocket):
     prev_sentences = []
     prev_lock = threading.Lock()
     transcribe_q = queue.Queue()
+    state = {'text_buffer': ''}  # mutable so transcription_worker can update it
 
     def transcription_worker():
         while True:
@@ -825,7 +863,9 @@ async def stream_local(ws: WebSocket):
                 break
             with prev_lock:
                 prev = list(prev_sentences)
-            ht_text = _transcribe_and_broadcast_ht(session_id, audio_np, prev, send_callback)
+            ht_text, state['text_buffer'] = _transcribe_and_broadcast_ht(
+                session_id, audio_np, state['text_buffer'], prev, send_callback
+            )
             if ht_text:
                 with prev_lock:
                     prev_sentences.append(ht_text)
@@ -835,18 +875,15 @@ async def stream_local(ws: WebSocket):
     worker = threading.Thread(target=transcription_worker, daemon=True)
     worker.start()
 
+    # Accumulate raw int16 samples; faster-whisper VAD handles silence internally.
     sample_buffer = []
-    silence_run = 0
-    has_content = False
 
     def flush():
-        nonlocal sample_buffer, silence_run, has_content
+        nonlocal sample_buffer
         if not sample_buffer:
             return
-        audio_np = np.concatenate(sample_buffer)
+        audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
         sample_buffer = []
-        silence_run = 0
-        has_content = False
         transcribe_q.put(audio_np)
 
     try:
@@ -864,20 +901,9 @@ async def stream_local(ws: WebSocket):
             chunk_int16 = np.frombuffer(msg_bytes, dtype=np.int16)
             if len(chunk_int16) == 0:
                 continue
-            chunk_float = chunk_int16.astype(np.float32) / 32768.0
+            sample_buffer.append(chunk_int16)
 
-            rms = float(np.sqrt(np.mean(chunk_float ** 2)))
-            if rms < _SILENCE_THRESH_RMS:
-                silence_run += len(chunk_float)
-            else:
-                silence_run = 0
-                has_content = True
-
-            sample_buffer.append(chunk_float)
-            total = sum(len(b) for b in sample_buffer)
-
-            split_on_silence = has_content and silence_run >= _SILENCE_MIN_SAMPLES
-            if split_on_silence or total >= _MAX_CHUNK_SAMPLES:
+            if sum(len(b) for b in sample_buffer) >= _MAX_CHUNK_SAMPLES:
                 flush()
 
     finally:
@@ -885,8 +911,7 @@ async def stream_local(ws: WebSocket):
             s = sessions.get(session_id)
             if s is session:
                 session['broadcaster_connected'] = False
-        if has_content and sample_buffer:
-            flush()
+        flush()
         transcribe_q.put(None)
         worker.join(timeout=30)
         log.info("stream_local: closed session=%s", session_id)
