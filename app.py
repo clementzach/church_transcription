@@ -229,12 +229,32 @@ def _tts_worker(session_id, lang):
     )
 
     while not shutdown.is_set():
+        # Block until there is actual text to synthesize before opening a gRPC
+        # stream — avoids idle stream-open API calls when no listeners are present.
+        first_text = None
+        while not shutdown.is_set():
+            try:
+                first_text = tts_q.get(timeout=1.0)
+                break
+            except queue.Empty:
+                continue
+
+        if shutdown.is_set():
+            break
+        if first_text is None:  # shutdown sentinel
+            break
+
         call_alive = threading.Event()
         call_alive.set()
 
-        def request_gen():
+        def request_gen(initial=first_text):
             """Yields synthesis requests; consumed by gRPC in its background thread."""
             yield config_req
+            _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': initial}))
+            log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, initial)
+            yield _texttospeech.StreamingSynthesizeRequest(
+                input=_texttospeech.StreamingSynthesisInput(text=initial)
+            )
             inactive_since = None
             while call_alive.is_set():
                 try:
@@ -252,7 +272,6 @@ def _tts_worker(session_id, lang):
                     shutdown.set()
                     call_alive.clear()
                     return
-                # Caption first so text appears before audio arrives.
                 _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
                 log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
                 yield _texttospeech.StreamingSynthesizeRequest(
@@ -268,9 +287,6 @@ def _tts_worker(session_id, lang):
                 log.error("[tts:%s:%s] Stream error: %s", session_id, lang, e)
         finally:
             call_alive.clear()
-
-        if not shutdown.is_set():
-            time.sleep(0.2)  # brief pause before reopening
 
     log.info("TTS worker stopped: session=%s lang=%s", session_id, lang)
 
