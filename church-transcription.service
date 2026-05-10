@@ -12,8 +12,8 @@ RuntimeDirectory=church-transcription
 RuntimeDirectoryMode=0750
 StateDirectory=church-transcription
 UMask=007
-ExecStart=/home/zacharyclement/church_transcription/venv/bin/gunicorn \
-  -k gevent -w 1 --bind unix:/run/church-transcription/gunicorn.sock app:app
+ExecStart=/home/zacharyclement/church_transcription/venv/bin/uvicorn \
+  app:app --uds /run/church-transcription/gunicorn.sock
 
 Restart=on-failure
 RestartSec=2
