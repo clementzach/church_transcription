@@ -279,9 +279,11 @@ def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentenc
 
     with _lock:
         sess = sessions.get(session_id)
+        display_langs = set(sess.get('display_langs', ALL_LANGS)) if sess else set()
+        listener_langs = {lang for lang in ALL_LANGS if sess and sess['listener_registry'].get(lang)}
         active_langs = [
             lang for lang in ALL_LANGS
-            if lang != 'ht' and sess and sess['listener_registry'].get(lang)
+            if lang != 'ht' and lang in (display_langs | listener_langs)
         ]
 
     if not active_langs:
@@ -834,6 +836,7 @@ async def stream_local(ws: WebSocket):
         raw_first = await ws.receive_text()
         first_msg = json.loads(raw_first)
         session_id = first_msg.get('session_id', '')
+        display_langs = [l for l in first_msg.get('display_langs', ALL_LANGS) if l in ALL_LANGS]
     except Exception:
         await ws.close()
         return
@@ -845,6 +848,7 @@ async def stream_local(ws: WebSocket):
             await ws.close()
             return
         session['broadcaster_connected'] = True
+        session['display_langs'] = display_langs
 
     log.info("stream_local: session=%s", session_id)
 
@@ -896,6 +900,18 @@ async def stream_local(ws: WebSocket):
                 break
             msg_bytes = data.get('bytes')
             if not msg_bytes:
+                # May be a text control message (e.g. display_langs update).
+                msg_text = data.get('text')
+                if msg_text:
+                    try:
+                        ctrl = json.loads(msg_text)
+                        if ctrl.get('type') == 'display_langs':
+                            langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
+                            with _lock:
+                                if sessions.get(session_id) is session:
+                                    session['display_langs'] = langs
+                    except Exception:
+                        pass
                 continue
 
             chunk_int16 = np.frombuffer(msg_bytes, dtype=np.int16)

@@ -983,7 +983,7 @@ async function startSession() {
 
   ws.addEventListener('open', async () => {
     console.log('[ws] Backend WebSocket open, endpoint=' + wsEndpoint);
-    ws.send(JSON.stringify({ session_id: currentSessionId }));
+    ws.send(JSON.stringify({ session_id: currentSessionId, display_langs: [...visiblePanels] }));
     await startAudio();
   });
 
@@ -1164,6 +1164,10 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
       btn.classList.remove('hidden-panel');
     }
     updateGridLayout();
+    // Notify the server so it only translates visible languages (local HT mode).
+    if (isLocalHt && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'display_langs', langs: [...visiblePanels] }));
+    }
   });
 });
 
