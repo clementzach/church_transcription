@@ -557,7 +557,7 @@
       <input id="session-code-input" type="text" maxlength="6" placeholder="XXXXXX" autocomplete="off" spellcheck="false" title="Enter a 6-character session code">
       <span id="session-id-value" style="display:none"></span>
       <button id="copy-session-btn" disabled title="Copy session ID">Copy</button>
-      <a id="listener-link" href="/church_transcription/listen" target="_blank">Listener ↗</a>
+      <a id="listener-link" href="listen" target="_blank">Listener ↗</a>
     </div>
 
     <div id="controls">
@@ -649,7 +649,7 @@
 
     <h3>Are you a listener?</h3>
     <ul>
-      <li>This page is for the <strong>broadcaster</strong> (the person running the microphone). If you want to read captions or hear translated audio, go to the <strong><a href="/church_transcription/listen" target="_blank">Listener page ↗</a></strong> instead.</li>
+      <li>This page is for the <strong>broadcaster</strong> (the person running the microphone). If you want to read captions or hear translated audio, go to the <strong><a href="listen" target="_blank">Listener page ↗</a></strong> instead.</li>
     </ul>
 
     <h3>Starting a session</h3>
@@ -696,6 +696,12 @@
 </div>
 
 <script>
+// ── Base path (works at any subpath or at root) ────────────────────────────
+const BASE = (() => {
+  const p = location.pathname;
+  return p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1);
+})();
+
 // ── Constants ──────────────────────────────────────────────────────────────
 const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
 const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
@@ -781,7 +787,7 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
       // Explicitly end the backend session so init-session won't see an active broadcaster.
       if (sid) {
         try {
-          await fetch('/church_transcription/end-session', {
+          await fetch(BASE + 'end-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sid }),
@@ -928,8 +934,9 @@ async function startSession() {
   const code = sessionCodeInput.value.trim();
   if (code.length !== 6) return;
 
+  // Init session
   try {
-    const resp = await fetch('/church_transcription/init-session', {
+    const resp = await fetch(BASE + 'init-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ language: selectedLang, session_id: code }),
@@ -966,14 +973,13 @@ async function startSession() {
   statusDot.classList.add('live');
   clearPanels();
 
-  // Open backend WebSocket
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${wsProto}//${location.host}/church_transcription/stream`);
+  ws = new WebSocket(`${wsProto}//${location.host}${BASE}stream`);
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', async () => {
     console.log('[ws] Backend WebSocket open');
-    ws.send(JSON.stringify({ session_id: currentSessionId }));
+    ws.send(JSON.stringify({ session_id: currentSessionId, display_langs: [...visiblePanels] }));
     await startAudio();
   });
 
@@ -1016,7 +1022,7 @@ async function stopSession(userInitiated = true) {
   if (userInitiated) {
     // Free the session code so another broadcaster can reuse it.
     if (currentSessionId) {
-      fetch('/church_transcription/end-session', {
+      fetch(BASE + 'end-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: currentSessionId }),
@@ -1154,6 +1160,10 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
       btn.classList.remove('hidden-panel');
     }
     updateGridLayout();
+    // Notify the server of the current visible panels.
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'display_langs', langs: [...visiblePanels] }));
+    }
   });
 });
 

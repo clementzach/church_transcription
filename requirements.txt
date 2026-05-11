@@ -4,3 +4,17 @@ python-dotenv
 httpx
 websockets
 google-cloud-texttospeech>=2.29.0
+google-genai
+openai
+anthropic
+pydub
+faster-whisper
+numpy
+audiomentations
+torch
+transformers
+datasets
+evaluate
+jiwer
+accelerate
+tensorboard

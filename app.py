@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
@@ -7,14 +8,15 @@ import queue
 import string
 import threading
 import time
-
 import httpx
+import numpy as np
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from dotenv import load_dotenv
 import websockets
 from google.cloud import texttospeech as _texttospeech
 import google.auth.api_key as _google_api_key
+from google import genai as _google_genai
 from filter import filter_text as _filter_text
 
 load_dotenv()
@@ -30,16 +32,51 @@ app = FastAPI()
 
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 
-# ── Google Cloud TTS client (singleton, shared across all sessions) ─────────
+# Google Cloud TTS client (singleton, shared across all sessions).
 # Explicit ApiKeyCredentials bypasses google.auth.default() credential
-# discovery, which otherwise hangs ~30s on non-GCE machines trying to reach
-# the GCE metadata server.
+# discovery, which otherwise hangs ~30s on non-GCE machines.
 _tts_client = _texttospeech.TextToSpeechClient(
-    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_API_KEY"))
+    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_TTS_API_KEY"))
 )
+# Chirp3 HD voices output MULAW at 24000 Hz natively (confirmed by test).
+# LINEAR16 is not supported for streaming_synthesize; MULAW is used instead.
+TTS_SAMPLE_RATE = 24000
+# After this many seconds of no new text, close the gRPC stream and reopen.
+TTS_INACTIVITY_TIMEOUT = 30.0
 
 ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
 TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
+
+# Local Haitian Creole Whisper model (optional)
+LOCAL_HAITIAN_PATH = os.getenv('LOCAL_HAITIAN_PATH')
+_local_whisper_model = None
+if LOCAL_HAITIAN_PATH:
+    try:
+        from faster_whisper import WhisperModel
+        _local_whisper_model = WhisperModel(
+            LOCAL_HAITIAN_PATH, device='cuda', compute_type='float16'
+        )
+        log.info("Loaded local HT Whisper model from %s", LOCAL_HAITIAN_PATH)
+    except Exception as _e:
+        log.error("Failed to load local Whisper model from %s: %s", LOCAL_HAITIAN_PATH, _e)
+
+google_llm_client = None
+if LOCAL_HAITIAN_PATH:
+    google_llm_client = _google_genai.Client(api_key=os.getenv("GOOGLE_LLM_API_KEY"))
+
+# ── Local HT audio chunking / translation constants ───────────────────────
+_WHISPER_SR = 16000
+_MAX_CHUNK_SAMPLES = 10 * _WHISPER_SR   # flush audio to Whisper every 10 s max
+_MAX_TRANSLATION_WORDS = 40             # also flush text buffer at this word count
+
+_TRANSLATION_LANG_NAMES = {
+    'en': 'English',
+    'es': 'Spanish',
+    'pt': 'Portuguese',
+    'zh': 'Mandarin Chinese',
+    'fr': 'French',
+    'no': 'Norwegian',
+}
 
 # Gladia live-session config — kept server-side so the browser never needs to
 # know about Gladia's API surface.
@@ -64,26 +101,17 @@ GLADIA_CONFIG_BASE = {
     },
 }
 
-# ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
-OPENAI_TTS_VOICES = {
-    'es': 'nova',
-    'pt': 'shimmer',
-    'ht': 'alloy',
-    'zh': 'nova',
-    'fr': 'echo',
-    'no': 'alloy',
+GOOGLE_TTS_LOCALES = {
+    'en': 'en-US',
+    'es': 'es-US',
+    'pt': 'pt-BR',
+    'ht': 'fr-FR',   # no fr-HT locale; Chirp3-HD voices handle Creole via fr-FR
+    'zh': 'cmn-CN',
+    'fr': 'fr-FR',
+    'no': 'nb-NO',
 }
-OPENAI_TTS_INSTRUCTIONS = {
-    'es': 'Speak naturally and clearly in Spanish.',
-    'pt': 'Fale de forma natural e clara em português.',
-    'ht': 'Ou pale kreyòl tankou yon natif natal',
-    'zh': '请用标准普通话自然流利地朗读，像母语人士一样说话，发音清晰，语调自然。',
-    'fr': 'Parlez de manière naturelle et claire en français.',
-    'no': 'Snakk naturlig og tydelig på norsk.',
-}
-
-# ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
 GOOGLE_TTS_VOICES = {
+    'en': 'Puck',
     'es': 'Charon',
     'pt': 'Aoede',
     'ht': 'Kore',
@@ -91,18 +119,6 @@ GOOGLE_TTS_VOICES = {
     'fr': 'Puck',
     'no': 'Charon',
 }
-GOOGLE_TTS_LOCALES = {
-    'en': 'en-US',
-    'es': 'es-US',
-    'pt': 'pt-BR',
-    'ht': 'fr-HT',
-    'zh': 'cmn-CN',
-    'fr': 'fr-FR',
-    'no': 'nb-NO',
-}
-# After this many seconds of no new text, close the gRPC stream and reopen on demand.
-# Keeps the streaming_synthesize call count well within Google's ~200/day rate limit.
-TTS_INACTIVITY_TIMEOUT = 30.0
 
 # ── Session state ─────────────────────────────────────────────────────────────
 # sessions[session_id] = {
@@ -168,6 +184,123 @@ def _teardown_session(session, reason='Session ended'):
                 pass
 
 
+def _translate_ht_to(ht_text, target_lang, prev_sentences):
+    """Translate Haitian Creole text to target_lang using Gemini text model."""
+    lang_name = _TRANSLATION_LANG_NAMES[target_lang]
+    context_lines = list(prev_sentences)[-2:]
+
+    prompt = (
+        "You are translating a live Latter-day Saint (LDS/Mormon) church talk from Haitian Creole "
+        f"to {lang_name}. Speakers may reference LDS-specific scripture, theology, and "
+        "organizational terms — preserve proper nouns exactly. The transcription may have been "
+        "garbled by speech recognition."
+    )
+    if context_lines:
+        prompt += "\n\nPrevious sentences (for context):\n" + "\n".join(context_lines)
+    prompt += (
+        f"\n\nTranslate the following Haitian Creole text to {lang_name}. "
+        "Output only the translation with no explanation:\n" + ht_text
+    )
+
+    resp = google_llm_client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+    )
+    return resp.text.strip()
+
+
+def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentences, send_callback):
+    """Transcribe audio with faster-whisper VAD, buffer text until a sentence boundary
+    or max word count, then translate active languages in parallel.
+
+    Returns (ht_text, updated_text_buffer). ht_text is empty string if Whisper
+    produced nothing; text_buffer carries over across calls until flushed.
+    """
+    chunk_secs = len(audio_np) / _WHISPER_SR
+    t0 = time.time()
+    try:
+        segments, _ = _local_whisper_model.transcribe(
+            audio_np, language='ht', vad_filter=True,
+            vad_parameters={'min_silence_duration_ms': 500},
+        )
+        ht_text = " ".join(seg.text.strip() for seg in segments).strip()
+    except Exception as e:
+        log.error("[local_ht:%s] Whisper error: %s", session_id, e)
+        return '', text_buffer
+    elapsed = time.time() - t0
+    log.info("[local_ht:%s] chunk=%.1fs whisper=%.2fs text=%.60s",
+             session_id, chunk_secs, elapsed, ht_text or '(empty)')
+
+    if not ht_text:
+        return '', text_buffer
+
+    ht_text = _filter_text(ht_text)
+
+    # Send raw HT transcript to broadcaster display immediately.
+    try:
+        send_callback(json.dumps({
+            'type': 'transcript',
+            'data': {'utterance': {'text': ht_text, 'is_final': True, 'language': 'ht'}},
+        }))
+    except Exception:
+        pass
+
+    # HT listeners get audio on every chunk — no need to wait for a full sentence.
+    _enqueue_tts(session_id, 'ht', ht_text)
+
+    # Accumulate into the translation buffer and check for a flush trigger.
+    text_buffer = (text_buffer + ' ' + ht_text).strip()
+    ends_sentence = text_buffer[-1] in '.?!…' if text_buffer else False
+    word_count = len(text_buffer.split())
+
+    if not ends_sentence and word_count < _MAX_TRANSLATION_WORDS:
+        return ht_text, text_buffer
+
+    # Flush: translate the buffered text into every language that has a listener.
+    text_to_translate = text_buffer
+    text_buffer = ''
+
+    with _lock:
+        sess = sessions.get(session_id)
+        display_langs = set(sess.get('display_langs', ALL_LANGS)) if sess else set()
+        listener_langs = {lang for lang in ALL_LANGS if sess and sess['listener_registry'].get(lang)}
+        active_langs = [
+            lang for lang in ALL_LANGS
+            if lang != 'ht' and lang in (display_langs | listener_langs)
+        ]
+
+    if not active_langs:
+        return ht_text, text_buffer
+
+    def translate_one(lang):
+        try:
+            translated = _translate_ht_to(text_to_translate, lang, prev_sentences)
+            return lang, _filter_text(translated) if translated else None
+        except Exception as e:
+            log.error("[local_ht:%s] Translation to %s failed: %s", session_id, lang, e)
+            return lang, None
+
+    with ThreadPoolExecutor(max_workers=len(active_langs)) as executor:
+        results = list(executor.map(translate_one, active_langs))
+
+    for lang, translated in results:
+        if not translated:
+            continue
+        try:
+            send_callback(json.dumps({
+                'type': 'translation',
+                'data': {
+                    'target_language': lang,
+                    'translated_utterance': {'text': translated},
+                },
+            }))
+        except Exception:
+            pass
+        _enqueue_tts(session_id, lang, translated)
+
+    return ht_text, text_buffer
+
+
 def _expire_session(session_id):
     """Called by the session timer after SESSION_TIMEOUT_SECS."""
     log.info("Session %s timed out after %ds", session_id, SESSION_TIMEOUT_SECS)
@@ -190,18 +323,11 @@ def _enqueue_tts(session_id, lang, text):
 def _tts_worker(session_id, lang):
     """Per-(session, lang) TTS worker.
 
-    Maintains one long-lived streaming_synthesize call that accepts multiple
-    utterances, keeping the call count well within API rate limits.  The stream
-    is closed after TTS_INACTIVITY_TIMEOUT seconds of silence and reopened on
-    the next utterance.
-
-    request_gen (runs in gRPC's internal background thread)
-      • Reads text from tts_queues[lang], broadcasts the caption, then yields
-        the synthesis request.
-      • Returns after TTS_INACTIVITY_TIMEOUT of silence or on shutdown sentinel.
-
-    The main worker loop iterates the streaming responses directly, broadcasting
-    each raw PCM chunk to listeners as it arrives.
+    Maintains one long-lived streaming_synthesize gRPC call across multiple
+    utterances for voice continuity.  The stream closes after
+    TTS_INACTIVITY_TIMEOUT seconds of silence and reopens on the next utterance.
+    sample_rate_hertz is omitted so the API uses each voice's native rate
+    (22050 Hz for Standard voices), matching TTS_SAMPLE_RATE.
     """
     log.info("TTS worker started: session=%s lang=%s", session_id, lang)
 
@@ -214,7 +340,7 @@ def _tts_worker(session_id, lang):
     shutdown = threading.Event()
 
     locale = GOOGLE_TTS_LOCALES[lang]
-    voice_name = f"{locale}-Standard-A"
+    voice_name = f"{locale}-Chirp3-HD-{GOOGLE_TTS_VOICES[lang]}"
     config_req = _texttospeech.StreamingSynthesizeRequest(
         streaming_config=_texttospeech.StreamingSynthesizeConfig(
             voice=_texttospeech.VoiceSelectionParams(
@@ -222,15 +348,13 @@ def _tts_worker(session_id, lang):
                 name=voice_name,
             ),
             streaming_audio_config=_texttospeech.StreamingAudioConfig(
-                audio_encoding=_texttospeech.AudioEncoding.LINEAR16,
-                sample_rate_hertz=24000,
+                audio_encoding=_texttospeech.AudioEncoding.MULAW,
+                # sample_rate_hertz omitted — Chirp3 HD native rate is 24000 Hz
             ),
         )
     )
 
     while not shutdown.is_set():
-        # Block until there is actual text to synthesize before opening a gRPC
-        # stream — avoids idle stream-open API calls when no listeners are present.
         first_text = None
         while not shutdown.is_set():
             try:
@@ -241,14 +365,13 @@ def _tts_worker(session_id, lang):
 
         if shutdown.is_set():
             break
-        if first_text is None:  # shutdown sentinel
+        if first_text is None:
             break
 
         call_alive = threading.Event()
         call_alive.set()
 
         def request_gen(initial=first_text):
-            """Yields synthesis requests; consumed by gRPC in its background thread."""
             yield config_req
             _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': initial}))
             log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, initial)
@@ -279,12 +402,22 @@ def _tts_worker(session_id, lang):
                 )
 
         try:
+            log.info("[tts:%s:%s] Opening stream: voice=%s", session_id, lang, voice_name)
+            audio_chunks = 0
             for response in _tts_client.streaming_synthesize(request_gen()):
                 if response.audio_content:
+                    audio_chunks += 1
                     _broadcast(session_id, lang, response.audio_content)
+            log.info("[tts:%s:%s] Stream closed: audio_chunks=%d", session_id, lang, audio_chunks)
         except Exception as e:
             if not shutdown.is_set():
-                log.error("[tts:%s:%s] Stream error: %s", session_id, lang, e)
+                grpc_code = getattr(e, 'code', None)
+                grpc_details = getattr(e, 'details', None)
+                if callable(grpc_code) and callable(grpc_details):
+                    log.error("[tts:%s:%s] Stream error: %s | grpc_code=%s | grpc_details=%s",
+                              session_id, lang, type(e).__name__, grpc_code(), grpc_details())
+                else:
+                    log.error("[tts:%s:%s] Stream error (%s): %s", session_id, lang, type(e).__name__, e)
         finally:
             call_alive.clear()
 
@@ -327,9 +460,6 @@ async def init_session(request: Request):
             media_type='application/json',
         )
 
-    # Quick pre-check to avoid unnecessary Gladia API calls.
-    # If the session exists but no broadcaster is connected, tear it down and allow re-init
-    # (handles page refresh / accidental disconnect without requiring a different code).
     old_session = None
     with _lock:
         existing = sessions.get(session_id)
@@ -345,6 +475,28 @@ async def init_session(request: Request):
     if old_session is not None:
         log.info("init-session: reclaiming disconnected session %s", session_id)
         _teardown_session(old_session, 'Session replaced by broadcaster')
+
+    # Local HT mode: skip Gladia when local Whisper is loaded and HT is selected
+    if src_lang == 'ht' and _local_whisper_model is not None:
+        timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
+        timer.daemon = True
+        session = {
+            'start_time': time.time(),
+            'src_lang': 'ht',
+            'gladia_url': '',
+            'broadcaster_connected': False,
+            'listener_registry': {lang: [] for lang in ALL_LANGS},
+            'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
+            'timer': timer,
+            'local_ht': True,
+        }
+        with _lock:
+            sessions[session_id] = session
+        for lang in ALL_LANGS:
+            threading.Thread(target=_tts_worker, args=(session_id, lang), daemon=True).start()
+        timer.start()
+        log.info("Session created (local HT): id=%s timeout=%ds", session_id, SESSION_TIMEOUT_SECS)
+        return {'session_id': session_id, 'local_ht': True}
 
     # Build the Gladia config server-side.
     config = copy.deepcopy(GLADIA_CONFIG_BASE)
@@ -384,8 +536,6 @@ async def init_session(request: Request):
             'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
             'timer': timer,
         }
-        # Atomic check-and-insert — handles concurrent requests with the same code.
-        # A connected session is always rejected; a disconnected one is replaced.
         concurrent_old = None
         with _lock:
             existing = sessions.get(session_id)
@@ -435,15 +585,11 @@ async def end_session(request: Request):
 async def stream(ws: WebSocket):
     await ws.accept()
 
-    # First message from browser: JSON with session_id only.
     try:
         raw_first = await ws.receive_text()
-    except WebSocketDisconnect:
-        return
-
-    try:
         first_msg = json.loads(raw_first)
         session_id = first_msg.get('session_id', '')
+        display_langs = [l for l in first_msg.get('display_langs', ALL_LANGS) if l in ALL_LANGS]
     except Exception as e:
         log.error("stream: failed to parse first message: %s", e)
         await ws.close()
@@ -461,17 +607,108 @@ async def stream(ws: WebSocket):
         await ws.close()
         return
 
-    gladia_url = session.get('gladia_url', '')
+    with _lock:
+        if sessions.get(session_id) is session:
+            session['broadcaster_connected'] = True
+            session['display_langs'] = display_langs
+
+    if session.get('local_ht'):
+        await _stream_local_ht(ws, session_id, session)
+    else:
+        await _stream_gladia(ws, session_id, session)
+
+
+async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict):
+    """Handle the local Haitian Creole Whisper transcription path."""
+    log.info("stream: session=%s (local HT)", session_id)
+
+    def send_callback(msg):
+        asyncio.run_coroutine_threadsafe(ws.send_text(msg), _loop)
+
+    prev_sentences = []
+    prev_lock = threading.Lock()
+    transcribe_q = queue.Queue()
+    state = {'text_buffer': ''}
+
+    def transcription_worker():
+        while True:
+            audio_np = transcribe_q.get()
+            if audio_np is None:
+                break
+            with prev_lock:
+                prev = list(prev_sentences)
+            ht_text, state['text_buffer'] = _transcribe_and_broadcast_ht(
+                session_id, audio_np, state['text_buffer'], prev, send_callback
+            )
+            if ht_text:
+                with prev_lock:
+                    prev_sentences.append(ht_text)
+                    if len(prev_sentences) > 2:
+                        del prev_sentences[:-2]
+
+    worker = threading.Thread(target=transcription_worker, daemon=True)
+    worker.start()
+
+    sample_buffer = []
+
+    def flush():
+        nonlocal sample_buffer
+        if not sample_buffer:
+            return
+        audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
+        sample_buffer = []
+        transcribe_q.put(audio_np)
+
+    try:
+        while True:
+            try:
+                data = await ws.receive()
+            except WebSocketDisconnect:
+                break
+            if data['type'] == 'websocket.disconnect':
+                break
+            msg_bytes = data.get('bytes')
+            if not msg_bytes:
+                msg_text = data.get('text')
+                if msg_text:
+                    try:
+                        ctrl = json.loads(msg_text)
+                        if ctrl.get('type') == 'display_langs':
+                            langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
+                            with _lock:
+                                if sessions.get(session_id) is session:
+                                    session['display_langs'] = langs
+                    except Exception:
+                        pass
+                continue
+
+            chunk_int16 = np.frombuffer(msg_bytes, dtype=np.int16)
+            if len(chunk_int16) == 0:
+                continue
+            sample_buffer.append(chunk_int16)
+            if sum(len(b) for b in sample_buffer) >= _MAX_CHUNK_SAMPLES:
+                flush()
+
+    finally:
+        with _lock:
+            if sessions.get(session_id) is session:
+                session['broadcaster_connected'] = False
+        flush()
+        transcribe_q.put(None)
+        worker.join(timeout=30)
+        log.info("stream: local HT closed session=%s", session_id)
+
+
+async def _stream_gladia(ws: WebSocket, session_id: str, session: dict):
+    """Handle the Gladia transcription/translation path."""
     src_lang = session.get('src_lang', 'auto')
+    gladia_url = session.get('gladia_url', '')
     if not gladia_url or not gladia_url.startswith("wss://"):
         log.error("stream: invalid or missing Gladia URL in session: %r", gladia_url)
         await ws.close()
         return
 
     log.info("stream: session=%s src_lang=%s connecting to Gladia at %s", session_id, src_lang, gladia_url)
-    with _lock:
-        if sessions.get(session_id) is session:
-            session['broadcaster_connected'] = True
 
     audio_chunks = 0
     gladia_msgs = 0
@@ -493,6 +730,18 @@ async def stream(ws: WebSocket):
                             if audio_chunks % 50 == 1:
                                 log.info("stream/forward_audio: relayed %d audio chunks", audio_chunks)
                             await gladia_ws.send(msg_bytes)
+                            continue
+                        msg_text = data.get('text')
+                        if msg_text:
+                            try:
+                                ctrl = json.loads(msg_text)
+                                if ctrl.get('type') == 'display_langs':
+                                    langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
+                                    with _lock:
+                                        if sessions.get(session_id) is session:
+                                            session['display_langs'] = langs
+                            except Exception:
+                                pass
                 except WebSocketDisconnect:
                     log.info("stream/browser_to_gladia: browser closed connection")
                 except Exception as e:
@@ -505,9 +754,6 @@ async def stream(ws: WebSocket):
                         gladia_msgs += 1
                         msg_type = None
 
-                        # Parse, filter text fields, then forward to browser.
-                        # Filtering here means both the recorder display and
-                        # listeners see clean text.
                         to_send = raw
                         try:
                             msg = json.loads(raw)
@@ -519,8 +765,6 @@ async def stream(ws: WebSocket):
                                 if utterance.get('text'):
                                     utterance['text'] = _filter_text(utterance['text'])
                                     to_send = json.dumps(msg)
-                                # English TTS comes from transcripts when source is English.
-                                # In auto/non-English-source mode it comes from translation msgs.
                                 if src_lang == 'en':
                                     is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
                                     if is_final and utterance.get('text'):
@@ -537,9 +781,8 @@ async def stream(ws: WebSocket):
                                 if lang in ALL_LANGS and text:
                                     _enqueue_tts(session_id, lang, text)
                         except Exception:
-                            pass  # on any parse error, forward the original raw message
+                            pass
 
-                        # Log data messages throttled; always log everything else.
                         if msg_type in ('transcript', 'translation'):
                             if gladia_msgs <= 5 or gladia_msgs % 20 == 0:
                                 log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
@@ -602,12 +845,12 @@ async def listen_stream(ws: WebSocket):
         log.info("listen-stream: registered listener for session=%s lang=%s (total=%d)",
                  session_id, lang, len(session['listener_registry'][lang]))
 
-    # Tell the client the raw-PCM format so it can decode chunks without WAV headers.
+    # Tell the client the audio format so it can decode chunks without WAV headers.
     await ws.send_text(json.dumps({
         'type': 'audio_config',
-        'sample_rate': 24000,
+        'sample_rate': TTS_SAMPLE_RATE,
         'channels': 1,
-        'sample_width': 2,  # Int16
+        'encoding': 'mulaw',  # MULAW 8-bit; Chirp3 HD streaming only supports MULAW/OGG_OPUS
     }))
 
     async def drain_incoming():
