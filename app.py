@@ -402,7 +402,13 @@ def _tts_worker(session_id, lang):
             log.info("[tts:%s:%s] Stream closed: audio_chunks=%d", session_id, lang, audio_chunks)
         except Exception as e:
             if not shutdown.is_set():
-                log.error("[tts:%s:%s] Stream error (%s): %s", session_id, lang, type(e).__name__, e)
+                grpc_code = getattr(e, 'code', None)
+                grpc_details = getattr(e, 'details', None)
+                if callable(grpc_code) and callable(grpc_details):
+                    log.error("[tts:%s:%s] Stream error: %s | grpc_code=%s | grpc_details=%s",
+                              session_id, lang, type(e).__name__, grpc_code(), grpc_details())
+                else:
+                    log.error("[tts:%s:%s] Stream error (%s): %s", session_id, lang, type(e).__name__, e)
         finally:
             call_alive.clear()
 
