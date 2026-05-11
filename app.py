@@ -14,6 +14,8 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from dotenv import load_dotenv
 import websockets
+from google.cloud import texttospeech as _texttospeech
+import google.auth.api_key as _google_api_key
 from google import genai as _google_genai
 from filter import filter_text as _filter_text
 
@@ -30,9 +32,17 @@ app = FastAPI()
 
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 
-# Gemini TTS client (singleton, shared across all sessions)
-_tts_client = _google_genai.Client(api_key=os.getenv("GOOGLE_TTS_API_KEY"))
-_GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts'
+# Google Cloud TTS client (singleton, shared across all sessions).
+# Explicit ApiKeyCredentials bypasses google.auth.default() credential
+# discovery, which otherwise hangs ~30s on non-GCE machines.
+_tts_client = _texttospeech.TextToSpeechClient(
+    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_TTS_API_KEY"))
+)
+# Standard voices output at 22050 Hz natively; we let the API decide the rate
+# by omitting sample_rate_hertz and hardcode this value in audio_config.
+TTS_SAMPLE_RATE = 22050
+# After this many seconds of no new text, close the gRPC stream and reopen.
+TTS_INACTIVITY_TIMEOUT = 30.0
 
 ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
 TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
@@ -91,15 +101,14 @@ GLADIA_CONFIG_BASE = {
     },
 }
 
-# Gemini TTS voice names — multilingual, language inferred from text content
-GOOGLE_TTS_VOICES = {
-    'en': 'Puck',
-    'es': 'Charon',
-    'pt': 'Aoede',
-    'ht': 'Kore',
-    'zh': 'Fenrir',
-    'fr': 'Puck',
-    'no': 'Charon',
+GOOGLE_TTS_LOCALES = {
+    'en': 'en-US',
+    'es': 'es-US',
+    'pt': 'pt-BR',
+    'ht': 'fr-HT',
+    'zh': 'cmn-CN',
+    'fr': 'fr-FR',
+    'no': 'nb-NO',
 }
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -305,9 +314,11 @@ def _enqueue_tts(session_id, lang, text):
 def _tts_worker(session_id, lang):
     """Per-(session, lang) TTS worker.
 
-    Waits for text on tts_queues[lang], broadcasts the caption immediately,
-    then calls Gemini TTS and streams PCM chunks (24 kHz / Int16 / mono) to
-    all listeners as they arrive.  A None sentinel stops the worker.
+    Maintains one long-lived streaming_synthesize gRPC call across multiple
+    utterances for voice continuity.  The stream closes after
+    TTS_INACTIVITY_TIMEOUT seconds of silence and reopens on the next utterance.
+    sample_rate_hertz is omitted so the API uses each voice's native rate
+    (22050 Hz for Standard voices), matching TTS_SAMPLE_RATE.
     """
     log.info("TTS worker started: session=%s lang=%s", session_id, lang)
 
@@ -317,51 +328,83 @@ def _tts_worker(session_id, lang):
             return
         tts_q = session['tts_queues'][lang]
 
-    voice_name = GOOGLE_TTS_VOICES[lang]
+    shutdown = threading.Event()
 
-    while True:
-        try:
-            text = tts_q.get(timeout=1.0)
-        except queue.Empty:
-            with _lock:
-                if not sessions.get(session_id):
-                    break
-            continue
+    locale = GOOGLE_TTS_LOCALES[lang]
+    voice_name = f"{locale}-Standard-A"
+    config_req = _texttospeech.StreamingSynthesizeRequest(
+        streaming_config=_texttospeech.StreamingSynthesizeConfig(
+            voice=_texttospeech.VoiceSelectionParams(
+                language_code=locale,
+                name=voice_name,
+            ),
+            streaming_audio_config=_texttospeech.StreamingAudioConfig(
+                audio_encoding=_texttospeech.AudioEncoding.LINEAR16,
+                # sample_rate_hertz omitted — API uses the voice's native rate
+            ),
+        )
+    )
 
-        if text is None:  # shutdown sentinel
+    while not shutdown.is_set():
+        first_text = None
+        while not shutdown.is_set():
+            try:
+                first_text = tts_q.get(timeout=1.0)
+                break
+            except queue.Empty:
+                continue
+
+        if shutdown.is_set():
+            break
+        if first_text is None:
             break
 
-        # Caption appears immediately, before synthesis begins.
-        _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
-        log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
+        call_alive = threading.Event()
+        call_alive.set()
+
+        def request_gen(initial=first_text):
+            yield config_req
+            _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': initial}))
+            log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, initial)
+            yield _texttospeech.StreamingSynthesizeRequest(
+                input=_texttospeech.StreamingSynthesisInput(text=initial)
+            )
+            inactive_since = None
+            while call_alive.is_set():
+                try:
+                    text = tts_q.get(timeout=0.2)
+                    inactive_since = None
+                except queue.Empty:
+                    if inactive_since is None:
+                        inactive_since = time.time()
+                    elif time.time() - inactive_since >= TTS_INACTIVITY_TIMEOUT:
+                        log.info("[tts:%s:%s] Inactivity timeout — closing stream", session_id, lang)
+                        call_alive.clear()
+                        return
+                    continue
+                if text is None:
+                    shutdown.set()
+                    call_alive.clear()
+                    return
+                _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
+                log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
+                yield _texttospeech.StreamingSynthesizeRequest(
+                    input=_texttospeech.StreamingSynthesisInput(text=text)
+                )
 
         try:
-            log.info("[tts:%s:%s] Synthesizing: voice=%s", session_id, lang, voice_name)
+            log.info("[tts:%s:%s] Opening stream: voice=%s", session_id, lang, voice_name)
             audio_chunks = 0
-            for chunk in _tts_client.models.stream_generate_content(
-                model=_GEMINI_TTS_MODEL,
-                contents=text,
-                config=_google_genai.types.GenerateContentConfig(
-                    response_modalities=['AUDIO'],
-                    speech_config=_google_genai.types.SpeechConfig(
-                        voice_config=_google_genai.types.VoiceConfig(
-                            prebuilt_voice_config=_google_genai.types.PrebuiltVoiceConfig(
-                                voice_name=voice_name,
-                            )
-                        )
-                    ),
-                ),
-            ):
-                try:
-                    audio_data = chunk.candidates[0].content.parts[0].inline_data.data
-                    if audio_data:
-                        audio_chunks += 1
-                        _broadcast(session_id, lang, audio_data)
-                except (IndexError, AttributeError):
-                    pass
-            log.info("[tts:%s:%s] Done: audio_chunks=%d", session_id, lang, audio_chunks)
+            for response in _tts_client.streaming_synthesize(request_gen()):
+                if response.audio_content:
+                    audio_chunks += 1
+                    _broadcast(session_id, lang, response.audio_content)
+            log.info("[tts:%s:%s] Stream closed: audio_chunks=%d", session_id, lang, audio_chunks)
         except Exception as e:
-            log.error("[tts:%s:%s] TTS error (%s): %s", session_id, lang, type(e).__name__, e)
+            if not shutdown.is_set():
+                log.error("[tts:%s:%s] Stream error (%s): %s", session_id, lang, type(e).__name__, e)
+        finally:
+            call_alive.clear()
 
     log.info("TTS worker stopped: session=%s lang=%s", session_id, lang)
 
@@ -790,7 +833,7 @@ async def listen_stream(ws: WebSocket):
     # Tell the client the raw-PCM format so it can decode chunks without WAV headers.
     await ws.send_text(json.dumps({
         'type': 'audio_config',
-        'sample_rate': 24000,
+        'sample_rate': TTS_SAMPLE_RATE,
         'channels': 1,
         'sample_width': 2,  # Int16
     }))
