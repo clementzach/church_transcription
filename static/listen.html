@@ -651,7 +651,7 @@ function connect() {
       return;
     }
     if (msg.type === 'audio_config') {
-      audioConfig = { sampleRate: msg.sample_rate, channels: msg.channels, sampleWidth: msg.sample_width };
+      audioConfig = { sampleRate: msg.sample_rate, channels: msg.channels, encoding: msg.encoding || 'linear16' };
       return;
     }
     if (msg.type === 'text') {
@@ -733,7 +733,7 @@ function attemptAutoReconnect(sessionId) {
     tag.style.color = LANG_COLORS[selectedLang];
 
     if (msg.type === 'audio_config') {
-      audioConfig = { sampleRate: msg.sample_rate, channels: msg.channels, sampleWidth: msg.sample_width };
+      audioConfig = { sampleRate: msg.sample_rate, channels: msg.channels, encoding: msg.encoding || 'linear16' };
     } else if (msg.type === 'text') {
       commitLine(msg.text);
     }
@@ -863,11 +863,25 @@ function enqueueAudio(buffer) {
   scheduleChunk(buffer);
 }
 
+function mulawToFloat32(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const out = new Float32Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    let u = ~bytes[i];
+    const sign = u & 0x80;
+    const exp  = (u >> 4) & 0x07;
+    const mant = u & 0x0f;
+    let s = ((mant << 3) + 0x84) << exp;
+    s -= 0x84;
+    out[i] = (sign ? -s : s) / 32768.0;
+  }
+  return out;
+}
+
 function scheduleChunk(buffer) {
-  // Convert Int16 PCM → Float32 for the AudioBuffer.
-  const int16   = new Int16Array(buffer);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768.0;
+  const float32 = (audioConfig.encoding === 'mulaw')
+    ? mulawToFloat32(buffer)
+    : (() => { const i16 = new Int16Array(buffer); const f = new Float32Array(i16.length); for (let i = 0; i < i16.length; i++) f[i] = i16[i] / 32768.0; return f; })();
 
   const { sampleRate, channels } = audioConfig;
   const frames = float32.length / channels;

@@ -38,9 +38,9 @@ GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 _tts_client = _texttospeech.TextToSpeechClient(
     credentials=_google_api_key.Credentials(os.getenv("GOOGLE_TTS_API_KEY"))
 )
-# Standard voices output at 22050 Hz natively; we let the API decide the rate
-# by omitting sample_rate_hertz and hardcode this value in audio_config.
-TTS_SAMPLE_RATE = 22050
+# Chirp3 HD voices output MULAW at 24000 Hz natively (confirmed by test).
+# LINEAR16 is not supported for streaming_synthesize; MULAW is used instead.
+TTS_SAMPLE_RATE = 24000
 # After this many seconds of no new text, close the gRPC stream and reopen.
 TTS_INACTIVITY_TIMEOUT = 30.0
 
@@ -105,10 +105,19 @@ GOOGLE_TTS_LOCALES = {
     'en': 'en-US',
     'es': 'es-US',
     'pt': 'pt-BR',
-    'ht': 'fr-HT',
+    'ht': 'fr-FR',   # no fr-HT locale; Chirp3-HD voices handle Creole via fr-FR
     'zh': 'cmn-CN',
     'fr': 'fr-FR',
     'no': 'nb-NO',
+}
+GOOGLE_TTS_VOICES = {
+    'en': 'Puck',
+    'es': 'Charon',
+    'pt': 'Aoede',
+    'ht': 'Kore',
+    'zh': 'Fenrir',
+    'fr': 'Puck',
+    'no': 'Charon',
 }
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -331,7 +340,7 @@ def _tts_worker(session_id, lang):
     shutdown = threading.Event()
 
     locale = GOOGLE_TTS_LOCALES[lang]
-    voice_name = f"{locale}-Standard-A"
+    voice_name = f"{locale}-Chirp3-HD-{GOOGLE_TTS_VOICES[lang]}"
     config_req = _texttospeech.StreamingSynthesizeRequest(
         streaming_config=_texttospeech.StreamingSynthesizeConfig(
             voice=_texttospeech.VoiceSelectionParams(
@@ -339,8 +348,8 @@ def _tts_worker(session_id, lang):
                 name=voice_name,
             ),
             streaming_audio_config=_texttospeech.StreamingAudioConfig(
-                audio_encoding=_texttospeech.AudioEncoding.LINEAR16,
-                # sample_rate_hertz omitted — API uses the voice's native rate
+                audio_encoding=_texttospeech.AudioEncoding.MULAW,
+                # sample_rate_hertz omitted — Chirp3 HD native rate is 24000 Hz
             ),
         )
     )
@@ -836,12 +845,12 @@ async def listen_stream(ws: WebSocket):
         log.info("listen-stream: registered listener for session=%s lang=%s (total=%d)",
                  session_id, lang, len(session['listener_registry'][lang]))
 
-    # Tell the client the raw-PCM format so it can decode chunks without WAV headers.
+    # Tell the client the audio format so it can decode chunks without WAV headers.
     await ws.send_text(json.dumps({
         'type': 'audio_config',
         'sample_rate': TTS_SAMPLE_RATE,
         'channels': 1,
-        'sample_width': 2,  # Int16
+        'encoding': 'mulaw',  # MULAW 8-bit; Chirp3 HD streaming only supports MULAW/OGG_OPUS
     }))
 
     async def drain_incoming():
