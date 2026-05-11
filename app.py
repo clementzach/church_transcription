@@ -14,8 +14,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from dotenv import load_dotenv
 import websockets
-from google.cloud import texttospeech as _texttospeech
-import google.auth.api_key as _google_api_key
+from google import genai as _google_genai
 from filter import filter_text as _filter_text
 
 load_dotenv()
@@ -31,13 +30,9 @@ app = FastAPI()
 
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 
-# ── Google Cloud TTS client (singleton, shared across all sessions) ─────────
-# Explicit ApiKeyCredentials bypasses google.auth.default() credential
-# discovery, which otherwise hangs ~30s on non-GCE machines trying to reach
-# the GCE metadata server.
-_tts_client = _texttospeech.TextToSpeechClient(
-    credentials=_google_api_key.Credentials(os.getenv("GOOGLE_TTS_API_KEY"))
-)
+# Gemini TTS client (singleton, shared across all sessions)
+_tts_client = _google_genai.Client(api_key=os.getenv("GOOGLE_TTS_API_KEY"))
+_GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts'
 
 ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
 TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
@@ -55,8 +50,8 @@ if LOCAL_HAITIAN_PATH:
     except Exception as _e:
         log.error("Failed to load local Whisper model from %s: %s", LOCAL_HAITIAN_PATH, _e)
 
+google_llm_client = None
 if LOCAL_HAITIAN_PATH:
-    from google import genai as _google_genai
     google_llm_client = _google_genai.Client(api_key=os.getenv("GOOGLE_LLM_API_KEY"))
 
 # ── Local HT audio chunking / translation constants ───────────────────────
@@ -96,25 +91,7 @@ GLADIA_CONFIG_BASE = {
     },
 }
 
-# ── OpenAI TTS config (gpt-4o-mini-tts) ───────────────────────────────────
-OPENAI_TTS_VOICES = {
-    'es': 'nova',
-    'pt': 'shimmer',
-    'ht': 'alloy',
-    'zh': 'nova',
-    'fr': 'echo',
-    'no': 'alloy',
-}
-OPENAI_TTS_INSTRUCTIONS = {
-    'es': 'Speak naturally and clearly in Spanish.',
-    'pt': 'Fale de forma natural e clara em português.',
-    'ht': 'Ou pale kreyòl tankou yon natif natal',
-    'zh': '请用标准普通话自然流利地朗读，像母语人士一样说话，发音清晰，语调自然。',
-    'fr': 'Parlez de manière naturelle et claire en français.',
-    'no': 'Snakk naturlig og tydelig på norsk.',
-}
-
-# ── Google Gemini 2.5 Flash TTS config ────────────────────────────────────
+# Gemini TTS voice names — multilingual, language inferred from text content
 GOOGLE_TTS_VOICES = {
     'en': 'Puck',
     'es': 'Charon',
@@ -124,18 +101,6 @@ GOOGLE_TTS_VOICES = {
     'fr': 'Puck',
     'no': 'Charon',
 }
-GOOGLE_TTS_LOCALES = {
-    'en': 'en-US',
-    'es': 'es-US',
-    'pt': 'pt-BR',
-    'ht': 'fr-HT',
-    'zh': 'cmn-CN',
-    'fr': 'fr-FR',
-    'no': 'nb-NO',
-}
-# After this many seconds of no new text, close the gRPC stream and reopen on demand.
-# Keeps the streaming_synthesize call count well within Google's ~200/day rate limit.
-TTS_INACTIVITY_TIMEOUT = 30.0
 
 # ── Session state ─────────────────────────────────────────────────────────────
 # sessions[session_id] = {
@@ -340,18 +305,9 @@ def _enqueue_tts(session_id, lang, text):
 def _tts_worker(session_id, lang):
     """Per-(session, lang) TTS worker.
 
-    Maintains one long-lived streaming_synthesize call that accepts multiple
-    utterances, keeping the call count well within API rate limits.  The stream
-    is closed after TTS_INACTIVITY_TIMEOUT seconds of silence and reopened on
-    the next utterance.
-
-    request_gen (runs in gRPC's internal background thread)
-      • Reads text from tts_queues[lang], broadcasts the caption, then yields
-        the synthesis request.
-      • Returns after TTS_INACTIVITY_TIMEOUT of silence or on shutdown sentinel.
-
-    The main worker loop iterates the streaming responses directly, broadcasting
-    each raw PCM chunk to listeners as it arrives.
+    Waits for text on tts_queues[lang], broadcasts the caption immediately,
+    then calls Gemini TTS and streams PCM chunks (24 kHz / Int16 / mono) to
+    all listeners as they arrive.  A None sentinel stops the worker.
     """
     log.info("TTS worker started: session=%s lang=%s", session_id, lang)
 
@@ -361,93 +317,51 @@ def _tts_worker(session_id, lang):
             return
         tts_q = session['tts_queues'][lang]
 
-    shutdown = threading.Event()
+    voice_name = GOOGLE_TTS_VOICES[lang]
 
-    locale = GOOGLE_TTS_LOCALES[lang]
-    voice_name = f"{locale}-Standard-A"
-    config_req = _texttospeech.StreamingSynthesizeRequest(
-        streaming_config=_texttospeech.StreamingSynthesizeConfig(
-            voice=_texttospeech.VoiceSelectionParams(
-                language_code=locale,
-                name=voice_name,
-            ),
-            streaming_audio_config=_texttospeech.StreamingAudioConfig(
-                audio_encoding=_texttospeech.AudioEncoding.LINEAR16,
-                sample_rate_hertz=24000,
-            ),
-        )
-    )
+    while True:
+        try:
+            text = tts_q.get(timeout=1.0)
+        except queue.Empty:
+            with _lock:
+                if not sessions.get(session_id):
+                    break
+            continue
 
-    while not shutdown.is_set():
-        # Block until there is actual text to synthesize before opening a gRPC
-        # stream — avoids idle stream-open API calls when no listeners are present.
-        first_text = None
-        while not shutdown.is_set():
-            try:
-                first_text = tts_q.get(timeout=1.0)
-                break
-            except queue.Empty:
-                continue
-
-        if shutdown.is_set():
-            break
-        if first_text is None:  # shutdown sentinel
+        if text is None:  # shutdown sentinel
             break
 
-        call_alive = threading.Event()
-        call_alive.set()
-
-        def request_gen(initial=first_text):
-            """Yields synthesis requests; consumed by gRPC in its background thread."""
-            yield config_req
-            _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': initial}))
-            log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, initial)
-            yield _texttospeech.StreamingSynthesizeRequest(
-                input=_texttospeech.StreamingSynthesisInput(text=initial)
-            )
-            inactive_since = None
-            while call_alive.is_set():
-                try:
-                    text = tts_q.get(timeout=0.2)
-                    inactive_since = None
-                except queue.Empty:
-                    if inactive_since is None:
-                        inactive_since = time.time()
-                    elif time.time() - inactive_since >= TTS_INACTIVITY_TIMEOUT:
-                        log.info("[tts:%s:%s] Inactivity timeout — closing stream", session_id, lang)
-                        call_alive.clear()
-                        return
-                    continue
-                if text is None:
-                    shutdown.set()
-                    call_alive.clear()
-                    return
-                _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
-                log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
-                yield _texttospeech.StreamingSynthesizeRequest(
-                    input=_texttospeech.StreamingSynthesisInput(text=text)
-                )
+        # Caption appears immediately, before synthesis begins.
+        _broadcast(session_id, lang, json.dumps({'type': 'text', 'text': text}))
+        log.info("[tts:%s:%s] → TTS: %.60s", session_id, lang, text)
 
         try:
-            log.info("[tts:%s:%s] Opening stream: voice=%s encoding=LINEAR16 rate=24000Hz",
-                     session_id, lang, voice_name)
+            log.info("[tts:%s:%s] Synthesizing: voice=%s", session_id, lang, voice_name)
             audio_chunks = 0
-            for response in _tts_client.streaming_synthesize(request_gen()):
-                if response.audio_content:
-                    audio_chunks += 1
-                    _broadcast(session_id, lang, response.audio_content)
-            log.info("[tts:%s:%s] Stream closed: audio_chunks=%d", session_id, lang, audio_chunks)
+            for chunk in _tts_client.models.stream_generate_content(
+                model=_GEMINI_TTS_MODEL,
+                contents=text,
+                config=_google_genai.types.GenerateContentConfig(
+                    response_modalities=['AUDIO'],
+                    speech_config=_google_genai.types.SpeechConfig(
+                        voice_config=_google_genai.types.VoiceConfig(
+                            prebuilt_voice_config=_google_genai.types.PrebuiltVoiceConfig(
+                                voice_name=voice_name,
+                            )
+                        )
+                    ),
+                ),
+            ):
+                try:
+                    audio_data = chunk.candidates[0].content.parts[0].inline_data.data
+                    if audio_data:
+                        audio_chunks += 1
+                        _broadcast(session_id, lang, audio_data)
+                except (IndexError, AttributeError):
+                    pass
+            log.info("[tts:%s:%s] Done: audio_chunks=%d", session_id, lang, audio_chunks)
         except Exception as e:
-            if not shutdown.is_set():
-                grpc_code = getattr(e, 'code', None)
-                grpc_details = getattr(e, 'details', None)
-                if callable(grpc_code) and callable(grpc_details):
-                    log.error("[tts:%s:%s] Stream error: %s | grpc_code=%s | grpc_details=%s",
-                              session_id, lang, type(e).__name__, grpc_code(), grpc_details())
-                else:
-                    log.error("[tts:%s:%s] Stream error (%s): %s", session_id, lang, type(e).__name__, e)
-        finally:
-            call_alive.clear()
+            log.error("[tts:%s:%s] TTS error (%s): %s", session_id, lang, type(e).__name__, e)
 
     log.info("TTS worker stopped: session=%s lang=%s", session_id, lang)
 
