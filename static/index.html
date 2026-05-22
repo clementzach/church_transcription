@@ -574,14 +574,14 @@
     <div class="toggle-row">
       <span class="toggle-label">Spoken language</span>
       <div id="lang-toggle">
-        <button class="lang-btn active" data-lang="auto">AUTO</button>
-        <button class="lang-btn" data-lang="en">EN</button>
+        <button class="lang-btn" data-lang="auto" style="display:none">AUTO</button>
+        <button class="lang-btn active" data-lang="en">EN</button>
         <button class="lang-btn" data-lang="es">ES</button>
         <button class="lang-btn" data-lang="ht">HT</button>
         <button class="lang-btn" data-lang="pt">PT</button>
         <button class="lang-btn" data-lang="zh">ZH</button>
         <button class="lang-btn" data-lang="fr">FR</button>
-        <button class="lang-btn" data-lang="no">NO</button>
+        <button class="lang-btn" data-lang="no" style="display:none">NO</button>
       </div>
     </div>
     <div class="toggle-row">
@@ -593,7 +593,7 @@
         <button class="panel-vis-btn" data-lang="pt">PT</button>
         <button class="panel-vis-btn" data-lang="zh">ZH</button>
         <button class="panel-vis-btn" data-lang="fr">FR</button>
-        <button class="panel-vis-btn" data-lang="no">NO</button>
+        <button class="panel-vis-btn" data-lang="no" style="display:none">NO</button>
       </div>
     </div>
   </div>
@@ -707,7 +707,7 @@ const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
 const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
 
 // ── State ──────────────────────────────────────────────────────────────────
-let selectedLang = 'auto';
+let selectedLang = 'en';
 let detectedSourceLang = 'en'; // updated from Gladia transcript messages in auto mode
 let currentSessionId = null;
 let ws = null;
