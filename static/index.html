@@ -428,6 +428,15 @@
   }
   #guide-close:hover { background: #f0f0f0; color: #333; }
   #guide-modal a { color: #3b82f6; }
+  #guide-modal dl {
+    display: grid;
+    grid-template-columns: 2.5rem 1fr;
+    gap: 5px 12px;
+    font-size: 14px;
+    margin-top: 4px;
+  }
+  #guide-modal dt { font-weight: 600; }
+  #guide-modal dd { margin: 0; color: #555; }
 
   /* ── QR modal ── */
   #qr-overlay {
@@ -670,33 +679,43 @@
     <h3>Starting a session</h3>
     <ul>
       <li>Type a <strong>6-character session code</strong> (letters and numbers) in the Session box in the top bar, then click <strong>Start</strong> and allow microphone access when prompted.</li>
-      <li>Share the session code with listeners so they can follow along on their devices at the Listener page.</li>
+      <li>Share the session code with listeners — or click <strong>QR</strong> to show a scannable QR code that opens the Listener page with the code pre-filled.</li>
       <li>Click <strong>Stop</strong> to end the session and free the code. Sessions also automatically expire after 2 hours.</li>
     </ul>
 
     <h3>Spoken language</h3>
     <ul>
-      <li><strong>AUTO</strong> — Gladia detects the spoken language automatically. Use this when the speaker may switch languages.</li>
-      <li><strong>EN / ES / HT / PT / ZH / FR</strong> — Pin to a specific spoken language for faster, more accurate transcription. All other languages still receive translated captions.</li>
+      <li>Select the language being spoken — <strong>EN / ES / HT / PT / ZH / FR</strong> — so the transcription is as accurate as possible. All other languages receive translated captions automatically.</li>
       <li>Changing this setting while live silently reconnects the session.</li>
     </ul>
+
+    <h3>Language codes</h3>
+    <dl>
+      <dt>EN</dt><dd>English</dd>
+      <dt>ES</dt><dd>Spanish</dd>
+      <dt>HT</dt><dd>Haitian Creole</dd>
+      <dt>PT</dt><dd>Portuguese</dd>
+      <dt>ZH</dt><dd>Mandarin</dd>
+      <dt>FR</dt><dd>French</dd>
+    </dl>
 
     <h3>Caption panels</h3>
     <ul>
       <li>The grid shows live captions in up to six languages simultaneously: English, Spanish, Haitian Creole, Portuguese, Mandarin, and French.</li>
       <li>The most recent line is shown largest; older lines fade and shrink above it.</li>
-      <li>Italic text in a panel is a live partial (in-progress utterance); it becomes solid once the sentence is finalised.</li>
+      <li>Italic text is a live partial (in-progress utterance); it becomes solid once the sentence is finalised.</li>
     </ul>
 
     <h3>Show panels buttons</h3>
     <ul>
       <li>Toggle individual language panels on or off. At least one panel must remain visible.</li>
-      <li>Hidden panels are dimmed with a transparent background; visible panels are solid-coloured.</li>
+      <li>Hidden panels are dimmed; visible panels are solid-coloured.</li>
     </ul>
 
     <h3>Other controls</h3>
     <ul>
-      <li><strong>⛶</strong> — Enter fullscreen. The header is hidden in fullscreen for a clean caption display.</li>
+      <li><strong>QR</strong> — Shows a QR code listeners can scan to join. Tap <strong>⛶</strong> inside the QR modal to display it full screen.</li>
+      <li><strong>⛶</strong> — Enter fullscreen. The header is hidden for a clean caption display.</li>
       <li><strong>Hide controls</strong> (bottom bar) — Hides the header without going fullscreen. Click <strong>Show controls</strong> to bring it back.</li>
       <li><strong>Listener ↗</strong> — Opens the Listener page in a new tab so you can preview what remote listeners see.</li>
     </ul>
