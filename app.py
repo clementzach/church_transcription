@@ -2,6 +2,7 @@ import asyncio
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+import itertools
 import json
 import logging
 import os
@@ -128,6 +129,11 @@ GOOGLE_TTS_VOICES = {
 SESSION_TIMEOUT_SECS = 2 * 3600  # 2 hours
 _lock = threading.Lock()
 sessions = {}
+
+# Unique id assigned to each /stream connection. The finally block only clears
+# broadcaster_connected if the current conn_id still matches, so a slow-exiting
+# previous connection can't clobber the flag set by a fresh reconnect.
+_conn_id_counter = itertools.count(1)
 
 # Captured at startup; used by TTS worker threads to schedule puts on the event loop.
 _loop: asyncio.AbstractEventLoop | None = None
@@ -309,6 +315,25 @@ def _expire_session(session_id):
     _teardown_session(session, 'Session expired (2-hour limit reached)')
 
 
+async def _wait_for_broadcaster_disconnect(session_id, timeout=1.5):
+    """Poll until the session's broadcaster_connected flag clears, up to timeout.
+
+    Returns True if the slot is free (session absent or disconnected),
+    False on timeout. Used by init-session so a broadcaster reconnecting
+    immediately after closing their WebSocket isn't rejected with a 409
+    just because the server hasn't run its finally block yet.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        with _lock:
+            s = sessions.get(session_id)
+            if s is None or not s.get('broadcaster_connected', False):
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
+
+
 def _enqueue_tts(session_id, lang, text):
     """Enqueue translated text for TTS synthesis, dropping any stale pending item."""
     with _lock:
@@ -467,20 +492,30 @@ async def init_session(request: Request):
             media_type='application/json',
         )
 
+    busy_response = Response(
+        content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
+        status_code=409,
+        media_type='application/json',
+    )
+
     with _lock:
         existing = sessions.get(session_id)
-        if existing is not None and existing.get('broadcaster_connected', False):
-            return Response(
-                content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
-                status_code=409,
-                media_type='application/json',
-            )
+        is_busy = existing is not None and existing.get('broadcaster_connected', False)
+
+    # A broadcaster reconnecting (e.g. after toggling language) may close its
+    # WebSocket microseconds before this request lands; the /stream finally
+    # block hasn't flipped broadcaster_connected yet. Wait briefly so a
+    # language switch isn't rejected with a spurious 409.
+    if is_busy and not await _wait_for_broadcaster_disconnect(session_id):
+        return busy_response
 
     # Local HT mode: skip Gladia when local Whisper is loaded and HT is selected
     if src_lang == 'ht' and _local_whisper_model is not None:
         with _lock:
             existing = sessions.get(session_id)
-            if existing is not None and not existing.get('broadcaster_connected', False):
+            if existing is not None:
+                if existing.get('broadcaster_connected', False):
+                    return busy_response
                 existing['src_lang'] = 'ht'
                 existing['gladia_url'] = ''
                 existing['local_ht'] = True
@@ -500,6 +535,9 @@ async def init_session(request: Request):
             'local_ht': True,
         }
         with _lock:
+            if session_id in sessions:
+                # Another request claimed the slot during the wait above.
+                return busy_response
             sessions[session_id] = session
         for lang in ALL_LANGS:
             threading.Thread(target=_tts_worker, args=(session_id, lang), daemon=True).start()
@@ -518,6 +556,12 @@ async def init_session(request: Request):
             l for l in ALL_LANGS if l != src_lang
         ]
 
+    # Re-check the slot is still free before spending a Gladia /v2/live call.
+    with _lock:
+        existing = sessions.get(session_id)
+        if existing is not None and existing.get('broadcaster_connected', False):
+            return busy_response
+
     log.info("Gladia config: %s", json.dumps(config))
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -534,32 +578,29 @@ async def init_session(request: Request):
         data = resp.json()
         gladia_url = data.get('url') or data.get('websocket_url') or data.get('ws_url', '')
 
-        timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
-        timer.daemon = True
-        session = {
-            'start_time': time.time(),
-            'src_lang': src_lang,
-            'gladia_url': gladia_url,
-            'broadcaster_connected': False,
-            'listener_registry': {lang: [] for lang in ALL_LANGS},
-            'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
-            'timer': timer,
-        }
         with _lock:
             existing = sessions.get(session_id)
             if existing is not None:
                 if existing.get('broadcaster_connected', False):
-                    return Response(
-                        content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
-                        status_code=409,
-                        media_type='application/json',
-                    )
+                    return busy_response
                 # Update existing session in-place to preserve listener connections
                 existing['src_lang'] = src_lang
                 existing['gladia_url'] = gladia_url
                 existing.pop('local_ht', None)
                 log.info("init-session: updated Gladia config for session %s (listeners preserved)", session_id)
                 return {'session_id': session_id}
+
+            timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
+            timer.daemon = True
+            session = {
+                'start_time': time.time(),
+                'src_lang': src_lang,
+                'gladia_url': gladia_url,
+                'broadcaster_connected': False,
+                'listener_registry': {lang: [] for lang in ALL_LANGS},
+                'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
+                'timer': timer,
+            }
             sessions[session_id] = session
 
         for lang in ALL_LANGS:
@@ -617,18 +658,20 @@ async def stream(ws: WebSocket):
         await ws.close()
         return
 
+    my_conn_id = next(_conn_id_counter)
     with _lock:
         if sessions.get(session_id) is session:
             session['broadcaster_connected'] = True
+            session['conn_id'] = my_conn_id
             session['display_langs'] = display_langs
 
     if session.get('local_ht'):
-        await _stream_local_ht(ws, session_id, session)
+        await _stream_local_ht(ws, session_id, session, my_conn_id)
     else:
-        await _stream_gladia(ws, session_id, session)
+        await _stream_gladia(ws, session_id, session, my_conn_id)
 
 
-async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict):
+async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict, conn_id: int):
     """Handle the local Haitian Creole Whisper transcription path."""
     log.info("stream: session=%s (local HT)", session_id)
 
@@ -701,7 +744,7 @@ async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict):
 
     finally:
         with _lock:
-            if sessions.get(session_id) is session:
+            if sessions.get(session_id) is session and session.get('conn_id') == conn_id:
                 session['broadcaster_connected'] = False
         flush()
         transcribe_q.put(None)
@@ -709,7 +752,7 @@ async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict):
         log.info("stream: local HT closed session=%s", session_id)
 
 
-async def _stream_gladia(ws: WebSocket, session_id: str, session: dict):
+async def _stream_gladia(ws: WebSocket, session_id: str, session: dict, conn_id: int):
     """Handle the Gladia transcription/translation path."""
     src_lang = session.get('src_lang', 'auto')
     gladia_url = session.get('gladia_url', '')
@@ -820,7 +863,7 @@ async def _stream_gladia(ws: WebSocket, session_id: str, session: dict):
         log.error("stream: failed to connect to Gladia: %s", e)
     finally:
         with _lock:
-            if sessions.get(session_id) is session:
+            if sessions.get(session_id) is session and session.get('conn_id') == conn_id:
                 session['broadcaster_connected'] = False
 
     log.info("stream: closing (audio_chunks=%d, gladia_msgs=%d)", audio_chunks, gladia_msgs)

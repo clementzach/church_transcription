@@ -819,10 +819,17 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
     if (isRunning) {
       currentSessionId = null; // clear so startSession always calls init-session
       await stopSession(false);
-      // Wait for the backend to process the WebSocket close before reconnecting
-      // so init-session sees broadcaster_connected=false and updates in-place.
-      await new Promise(r => setTimeout(r, 400));
-      startSession();
+      // The server waits briefly for broadcaster_connected to clear, but if it
+      // still 409s (very busy backend) we retry once before showing an error.
+      let ok = await startSession({ silentOnBusy: true });
+      if (!ok) {
+        await new Promise(r => setTimeout(r, 400));
+        ok = await startSession({ silentOnBusy: true });
+      }
+      if (!ok) {
+        sessionCodeInput.classList.add('error');
+        alert('Could not switch language — session is busy. Try again in a moment.');
+      }
     }
   });
 });
@@ -954,13 +961,13 @@ function clearPanels() {
 }
 
 // ── Session management ────────────────────────────────────────────────────
-async function startSession() {
-  if (isRunning) return;
+async function startSession(options = {}) {
+  if (isRunning) return false;
 
   clearReconnectTimer();
 
   const code = sessionCodeInput.value.trim();
-  if (code.length !== 6) return;
+  if (code.length !== 6) return false;
 
   // Init session
   try {
@@ -971,14 +978,15 @@ async function startSession() {
     });
     const data = await resp.json();
     if (!resp.ok) {
+      if (resp.status === 409 && options.silentOnBusy) return false;
       sessionCodeInput.classList.add('error');
       alert(data.error || `Failed to start session (${resp.status})`);
-      return;
+      return false;
     }
     currentSessionId = data.session_id;
   } catch (err) {
     alert('Failed to start session: ' + err.message);
-    return;
+    return false;
   }
 
   sessionIdEl.textContent = currentSessionId;
@@ -992,7 +1000,7 @@ async function startSession() {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch (err) {
     alert('Microphone access denied: ' + err.message);
-    return;
+    return false;
   }
 
   isRunning = true;
@@ -1030,6 +1038,8 @@ async function startSession() {
     console.error('[ws] Backend WebSocket error', evt);
     if (isRunning) scheduleReconnect();
   });
+
+  return true;
 }
 
 async function stopSession(userInitiated = true) {
