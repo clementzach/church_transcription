@@ -11,7 +11,7 @@ import threading
 import time
 import httpx
 import numpy as np
-from fastapi import FastAPI, Path, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from dotenv import load_dotenv
 import websockets
@@ -438,11 +438,15 @@ async def listen():
 
 
 @app.get("/{code}")
-async def index_with_code(code: str = Path(pattern=r"^[A-Z0-9]{6}$")):
-    return FileResponse("static/index.html")
+async def index_with_code(code: str):
+    from fastapi import HTTPException
+    valid_chars = string.ascii_uppercase + string.digits
+    if len(code) == 6 and all(c in valid_chars for c in code.upper()):
+        return FileResponse("static/index.html")
+    raise HTTPException(status_code=404)
 
 
-@app.get("/qr")
+@app.get("/api/qr")
 async def generate_qr(url: str):
     import qrcode
     img = qrcode.make(url)
