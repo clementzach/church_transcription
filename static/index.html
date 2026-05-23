@@ -7,7 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSe2keI3J3rs/B+tBkpFqk4s0NubBT5FLBA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1171,7 +1170,6 @@ document.querySelectorAll('.panel-vis-btn').forEach(btn => {
 
 // ── QR code modal ─────────────────────────────────────────────────────────
 const qrOverlay = document.getElementById('qr-overlay');
-let qrInstance = null;
 
 qrBtn.addEventListener('click', () => {
   const sessionCode = currentSessionId || sessionCodeInput.value;
@@ -1182,14 +1180,11 @@ qrBtn.addEventListener('click', () => {
 
   const box = document.getElementById('qr-code-box');
   box.innerHTML = '';
-  qrInstance = new QRCode(box, {
-    text: qrUrl,
-    width: 240,
-    height: 240,
-    colorDark: '#111111',
-    colorLight: '#ffffff',
-    correctLevel: QRCode.CorrectLevel.M,
-  });
+  const img = document.createElement('img');
+  img.src = BASE + 'qr?url=' + encodeURIComponent(qrUrl);
+  img.width = 240;
+  img.height = 240;
+  box.appendChild(img);
   document.getElementById('qr-url-text').textContent = qrUrl;
   qrOverlay.classList.add('open');
 });

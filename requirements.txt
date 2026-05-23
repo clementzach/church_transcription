@@ -1,4 +1,5 @@
 fastapi
+qrcode[pil]
 uvicorn[standard]
 python-dotenv
 httpx

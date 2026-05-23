@@ -1,6 +1,7 @@
 import asyncio
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 import json
 import logging
 import os
@@ -443,6 +444,15 @@ async def index_with_code(code: str):
     if len(code) == 6 and all(c in valid_chars for c in code.upper()):
         return FileResponse("static/index.html")
     raise HTTPException(status_code=404)
+
+
+@app.get("/qr")
+async def generate_qr(url: str):
+    import qrcode
+    img = qrcode.make(url)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 @app.post("/init-session")
