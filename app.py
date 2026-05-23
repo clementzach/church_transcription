@@ -862,9 +862,32 @@ async def stream(ws: WebSocket):
                 continue
 
             # Backend exited on its own (Gladia disconnect, network error, …).
-            # Without a fresh signal we'd loop forever; let the client reconnect.
-            log.warning("stream: backend exited unexpectedly (session=%s)", session_id)
-            break
+            # Try to resume in place so the broadcaster doesn't have to reconnect.
+            # Local HT needs no renegotiation; for Gladia we allocate a fresh
+            # /v2/live URL with the same src_lang, with bounded backoff.
+            log.warning("stream: backend exited unexpectedly (session=%s), attempting resume", session_id)
+            if session.get('local_ht'):
+                continue
+            resumed = False
+            for attempt, delay in enumerate((0.5, 2, 5)):
+                try:
+                    await asyncio.wait_for(disconnect_event.wait(), timeout=delay)
+                    break  # broadcaster disconnected while we were backing off
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    new_url = await _create_gladia_session(session.get('src_lang', 'auto'))
+                    session['gladia_url'] = new_url
+                    log.info("stream: resumed Gladia (session=%s) after %d attempt(s)",
+                             session_id, attempt + 1)
+                    resumed = True
+                    break
+                except Exception as e:
+                    log.warning("stream: resume attempt %d failed: %s", attempt + 1, e)
+            if not resumed:
+                log.error("stream: failed to resume after backend exit (session=%s)", session_id)
+                break
+            continue
     finally:
         if backend_task is not None and not backend_task.done():
             backend_task.cancel()
@@ -1027,12 +1050,26 @@ async def _run_gladia_backend(ws: WebSocket, session_id: str, session: dict,
 
             task1 = asyncio.create_task(forward_audio())
             task2 = asyncio.create_task(forward_transcripts())
+            cancelled = False
             try:
                 await asyncio.wait({task1, task2}, return_when=asyncio.FIRST_COMPLETED)
+            except asyncio.CancelledError:
+                cancelled = True
             finally:
                 task1.cancel()
                 task2.cancel()
                 await asyncio.gather(task1, task2, return_exceptions=True)
+                # Politely tell Gladia we're done so it tears down the session
+                # immediately instead of waiting for its idle timeout. Best-effort.
+                try:
+                    await asyncio.wait_for(
+                        gladia_ws.send(json.dumps({"type": "stop_recording"})),
+                        timeout=1.0,
+                    )
+                except Exception:
+                    pass
+                if cancelled:
+                    raise asyncio.CancelledError()
     except asyncio.CancelledError:
         raise
     except Exception as e:
