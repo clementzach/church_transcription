@@ -827,8 +827,10 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
         ok = await startSession({ silentOnBusy: true });
       }
       if (!ok) {
+        // Both attempts failed; reset UI so the user can click Start to retry.
         sessionCodeInput.classList.add('error');
-        alert('Could not switch language — session is busy. Try again in a moment.');
+        resetUiToStopped();
+        alert('Could not switch language — please click Start to try again.');
       }
     }
   });
@@ -1042,6 +1044,17 @@ async function startSession(options = {}) {
   return true;
 }
 
+function resetUiToStopped() {
+  sessionIdEl.style.display = 'none';
+  sessionCodeInput.style.display = '';
+  copySessionBtn.disabled = true;
+  qrBtn.disabled = true;
+  updateStartBtn();
+  stopBtn.disabled = true;
+  statusDot.classList.remove('live');
+  bottomPartial.textContent = '';
+}
+
 async function stopSession(userInitiated = true) {
   isRunning = false;
   clearReconnectTimer();
@@ -1067,16 +1080,7 @@ async function stopSession(userInitiated = true) {
       }).catch(() => {});
     }
     currentSessionId = null;
-
-    // Restore code input.
-    sessionIdEl.style.display = 'none';
-    sessionCodeInput.style.display = '';
-    copySessionBtn.disabled = true;
-    qrBtn.disabled = true;
-    updateStartBtn();
-    stopBtn.disabled = true;
-    statusDot.classList.remove('live');
-    bottomPartial.textContent = '';
+    resetUiToStopped();
   }
 }
 
