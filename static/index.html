@@ -18,7 +18,6 @@
     --pt: #a855f7;
     --zh: #06b6d4;
     --fr: #ec4899;
-    --no: #ef4444;
     --border: #e5e5e5;
     --bg: #ffffff;
     --text: #111111;
@@ -102,7 +101,6 @@
   .panel-vis-btn[data-lang="pt"] { --c: var(--pt); }
   .panel-vis-btn[data-lang="zh"] { --c: var(--zh); }
   .panel-vis-btn[data-lang="fr"] { --c: var(--fr); }
-  .panel-vis-btn[data-lang="no"] { --c: var(--no); }
   .panel-vis-btn.hidden-panel {
     background: transparent;
     color: var(--c);
@@ -140,7 +138,6 @@
   .lang-btn[data-lang="pt"] { --c: var(--pt); }
   .lang-btn[data-lang="zh"] { --c: var(--zh); }
   .lang-btn[data-lang="fr"] { --c: var(--fr); }
-  .lang-btn[data-lang="no"] { --c: var(--no); }
   .lang-btn.active {
     background: var(--c);
     color: #fff;
@@ -212,7 +209,6 @@
   .panel[data-lang="pt"] { --accent: var(--pt); }
   .panel[data-lang="zh"] { --accent: var(--zh); }
   .panel[data-lang="fr"] { --accent: var(--fr); }
-  .panel[data-lang="no"] { --accent: var(--no); }
 
   .panel-tag {
     font-size: 11px;
@@ -480,10 +476,9 @@
     line-height: 1.5;
   }
 
-  #qr-close {
+  #qr-close, #qr-fs {
     position: absolute;
     top: 14px;
-    right: 16px;
     background: none;
     border: none;
     font-size: 20px;
@@ -493,7 +488,33 @@
     padding: 2px 6px;
     border-radius: 4px;
   }
-  #qr-close:hover { background: #f0f0f0; color: #333; }
+  #qr-close { right: 16px; }
+  #qr-fs    { left: 16px; }
+  #qr-close:hover, #qr-fs:hover { background: #f0f0f0; color: #333; }
+
+  #qr-modal:fullscreen, #qr-modal:-webkit-full-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  #qr-modal:fullscreen #qr-code-box,
+  #qr-modal:-webkit-full-screen #qr-code-box {
+    width: 80vmin;
+    height: 80vmin;
+  }
+  #qr-modal:fullscreen #qr-code-box img,
+  #qr-modal:-webkit-full-screen #qr-code-box img {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
 
   /* ── Mobile ── */
   @media (max-width: 680px) {
@@ -580,7 +601,6 @@
         <button class="lang-btn" data-lang="pt">PT</button>
         <button class="lang-btn" data-lang="zh">ZH</button>
         <button class="lang-btn" data-lang="fr">FR</button>
-        <button class="lang-btn" data-lang="no" style="display:none">NO</button>
       </div>
     </div>
     <div class="toggle-row">
@@ -592,7 +612,6 @@
         <button class="panel-vis-btn" data-lang="pt">PT</button>
         <button class="panel-vis-btn" data-lang="zh">ZH</button>
         <button class="panel-vis-btn" data-lang="fr">FR</button>
-        <button class="panel-vis-btn" data-lang="no" style="display:none">NO</button>
       </div>
     </div>
   </div>
@@ -624,16 +643,13 @@
     <div class="panel-tag">FR</div>
     <div class="panel-lines" id="lines-fr"></div>
   </div>
-  <div class="panel" data-lang="no">
-    <div class="panel-tag">NO</div>
-    <div class="panel-lines" id="lines-no"></div>
-  </div>
 </div>
 
 <!-- QR modal -->
 <div id="qr-overlay">
   <div id="qr-modal">
     <button id="qr-close" aria-label="Close QR code">&#x2715;</button>
+    <button id="qr-fs" aria-label="Full screen">&#x26F6;</button>
     <h2>Scan to Join</h2>
     <div id="qr-code-box"></div>
     <p id="qr-url-text"></p>
@@ -702,8 +718,8 @@ const BASE = (() => {
 })();
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no'];
-const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr', 'no']; // non-English target languages
+const ALL_LANGS = ['en', 'es', 'ht', 'pt', 'zh', 'fr'];
+const TRANSLATION_LANGS = ['es', 'ht', 'pt', 'zh', 'fr']; // non-English target languages
 
 // ── State ──────────────────────────────────────────────────────────────────
 let selectedLang = 'en';
@@ -1189,7 +1205,15 @@ qrBtn.addEventListener('click', () => {
   qrOverlay.classList.add('open');
 });
 
-document.getElementById('qr-close').addEventListener('click', () => qrOverlay.classList.remove('open'));
+document.getElementById('qr-close').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  qrOverlay.classList.remove('open');
+});
+document.getElementById('qr-fs').addEventListener('click', () => {
+  const modal = document.getElementById('qr-modal');
+  if (modal.requestFullscreen) modal.requestFullscreen();
+  else if (modal.webkitRequestFullscreen) modal.webkitRequestFullscreen();
+});
 qrOverlay.addEventListener('click', (e) => { if (e.target === qrOverlay) qrOverlay.classList.remove('open'); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { qrOverlay.classList.remove('open'); } });
 
