@@ -467,24 +467,26 @@ async def init_session(request: Request):
             media_type='application/json',
         )
 
-    old_session = None
     with _lock:
         existing = sessions.get(session_id)
-        if existing is not None:
-            if existing.get('broadcaster_connected', False):
-                return Response(
-                    content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
-                    status_code=409,
-                    media_type='application/json',
-                )
-            old_session = sessions.pop(session_id)
-
-    if old_session is not None:
-        log.info("init-session: reclaiming disconnected session %s", session_id)
-        _teardown_session(old_session, 'Session replaced by broadcaster')
+        if existing is not None and existing.get('broadcaster_connected', False):
+            return Response(
+                content=json.dumps({'error': 'This session code is already in use. Choose a different code.'}),
+                status_code=409,
+                media_type='application/json',
+            )
 
     # Local HT mode: skip Gladia when local Whisper is loaded and HT is selected
     if src_lang == 'ht' and _local_whisper_model is not None:
+        with _lock:
+            existing = sessions.get(session_id)
+            if existing is not None and not existing.get('broadcaster_connected', False):
+                existing['src_lang'] = 'ht'
+                existing['gladia_url'] = ''
+                existing['local_ht'] = True
+                log.info("init-session: updated to local HT for session %s (listeners preserved)", session_id)
+                return {'session_id': session_id, 'local_ht': True}
+
         timer = threading.Timer(SESSION_TIMEOUT_SECS, _expire_session, args=(session_id,))
         timer.daemon = True
         session = {
@@ -543,7 +545,6 @@ async def init_session(request: Request):
             'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
             'timer': timer,
         }
-        concurrent_old = None
         with _lock:
             existing = sessions.get(session_id)
             if existing is not None:
@@ -553,11 +554,13 @@ async def init_session(request: Request):
                         status_code=409,
                         media_type='application/json',
                     )
-                concurrent_old = sessions.pop(session_id)
+                # Update existing session in-place to preserve listener connections
+                existing['src_lang'] = src_lang
+                existing['gladia_url'] = gladia_url
+                existing.pop('local_ht', None)
+                log.info("init-session: updated Gladia config for session %s (listeners preserved)", session_id)
+                return {'session_id': session_id}
             sessions[session_id] = session
-
-        if concurrent_old is not None:
-            _teardown_session(concurrent_old, 'Session replaced by broadcaster')
 
         for lang in ALL_LANGS:
             threading.Thread(

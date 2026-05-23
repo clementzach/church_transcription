@@ -817,19 +817,11 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
     document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
 
     if (isRunning) {
-      const sid = currentSessionId;
       currentSessionId = null; // clear so startSession always calls init-session
       await stopSession(false);
-      // Explicitly end the backend session so init-session won't see an active broadcaster.
-      if (sid) {
-        try {
-          await fetch(BASE + 'end-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sid }),
-          });
-        } catch (_) {}
-      }
+      // Wait for the backend to process the WebSocket close before reconnecting
+      // so init-session sees broadcaster_connected=false and updates in-place.
+      await new Promise(r => setTimeout(r, 400));
       startSession();
     }
   });
