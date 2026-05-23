@@ -1,6 +1,7 @@
 import asyncio
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 import json
 import logging
 import os
@@ -44,8 +45,8 @@ TTS_SAMPLE_RATE = 24000
 # After this many seconds of no new text, close the gRPC stream and reopen.
 TTS_INACTIVITY_TIMEOUT = 30.0
 
-ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr', 'no']
-TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr', 'no']
+ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr']
+TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr']
 
 # Local Haitian Creole Whisper model (optional)
 LOCAL_HAITIAN_PATH = os.getenv('LOCAL_HAITIAN_PATH')
@@ -75,7 +76,6 @@ _TRANSLATION_LANG_NAMES = {
     'pt': 'Portuguese',
     'zh': 'Mandarin Chinese',
     'fr': 'French',
-    'no': 'Norwegian',
 }
 
 # Gladia live-session config — kept server-side so the browser never needs to
@@ -108,7 +108,6 @@ GOOGLE_TTS_LOCALES = {
     'ht': 'fr-FR',   # no fr-HT locale; Chirp3-HD voices handle Creole via fr-FR
     'zh': 'cmn-CN',
     'fr': 'fr-FR',
-    'no': 'nb-NO',
 }
 GOOGLE_TTS_VOICES = {
     'en': 'Puck',
@@ -117,7 +116,6 @@ GOOGLE_TTS_VOICES = {
     'ht': 'Kore',
     'zh': 'Fenrir',
     'fr': 'Puck',
-    'no': 'Charon',
 }
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -443,6 +441,15 @@ async def index_with_code(code: str):
     if len(code) == 6 and all(c in valid_chars for c in code.upper()):
         return FileResponse("static/index.html")
     raise HTTPException(status_code=404)
+
+
+@app.get("/api/qr")
+async def generate_qr(url: str):
+    import qrcode
+    img = qrcode.make(url, box_size=15)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 @app.post("/init-session")
