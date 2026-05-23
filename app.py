@@ -315,13 +315,72 @@ def _expire_session(session_id):
     _teardown_session(session, 'Session expired (2-hour limit reached)')
 
 
-async def _wait_for_broadcaster_disconnect(session_id, timeout=1.5):
+def _build_gladia_config(src_lang):
+    """Return the Gladia /v2/live POST body for the given source language."""
+    config = copy.deepcopy(GLADIA_CONFIG_BASE)
+    if src_lang == 'auto':
+        config['language_config'] = {'languages': ALL_LANGS[:], 'code_switching': True}
+        config['realtime_processing']['translation_config']['target_languages'] = ALL_LANGS[:]
+    else:
+        config['language_config'] = {'languages': [src_lang], 'code_switching': False}
+        config['realtime_processing']['translation_config']['target_languages'] = [
+            l for l in ALL_LANGS if l != src_lang
+        ]
+    return config
+
+
+async def _create_gladia_session(src_lang):
+    """POST to Gladia /v2/live and return the WebSocket URL for the new session.
+
+    Raises RuntimeError on failure.
+    """
+    config = _build_gladia_config(src_lang)
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.gladia.io/v2/live",
+            headers={
+                "X-Gladia-Key": GLADIA_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json=config,
+            timeout=10,
+        )
+    if not resp.is_success:
+        raise RuntimeError(f"Gladia /v2/live failed: {resp.status_code} {resp.text}")
+    data = resp.json()
+    url = data.get('url') or data.get('websocket_url') or data.get('ws_url', '')
+    if not url:
+        raise RuntimeError("Gladia /v2/live response missing url")
+    return url
+
+
+async def _reconfigure_session_language(session, new_lang):
+    """Update an existing session in-place for a new source language.
+
+    For HT with local Whisper loaded, flips to local-HT mode (no Gladia call).
+    Otherwise allocates a fresh Gladia /v2/live session URL. Caller is
+    responsible for tearing down whatever backend was using the old config.
+    """
+    if new_lang == 'ht' and _local_whisper_model is not None:
+        session['src_lang'] = 'ht'
+        session['gladia_url'] = ''
+        session['local_ht'] = True
+        return
+    gladia_url = await _create_gladia_session(new_lang)
+    session['src_lang'] = new_lang
+    session['gladia_url'] = gladia_url
+    session.pop('local_ht', None)
+
+
+async def _wait_for_broadcaster_disconnect(session_id, timeout=0.5):
     """Poll until the session's broadcaster_connected flag clears, up to timeout.
 
     Returns True if the slot is free (session absent or disconnected),
     False on timeout. Used by init-session so a broadcaster reconnecting
     immediately after closing their WebSocket isn't rejected with a 409
-    just because the server hasn't run its finally block yet.
+    just because the server hasn't run its finally block yet. The client
+    awaits its own WebSocket close before calling us, so this is a safety
+    margin rather than the primary synchronization mechanism.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -634,6 +693,19 @@ async def end_session(request: Request):
 
 @app.websocket("/stream")
 async def stream(ws: WebSocket):
+    """Broadcaster /stream WebSocket.
+
+    A single router task reads from the browser WS and routes audio chunks
+    onto an asyncio.Queue, while control messages are handled inline (or
+    surface a signal — switch / disconnect — to the outer loop).
+
+    The outer loop owns the current "backend" (Gladia or local HT) as a
+    cancellable task that consumes from the audio queue. On a
+    switch_source_language control message, the loop tears down the current
+    backend, calls _reconfigure_session_language to swap Gladia URLs (or
+    flip to local HT), and re-enters the loop — all without the broadcaster
+    needing to close the WebSocket or stop capturing audio.
+    """
     await ws.accept()
 
     try:
@@ -665,22 +737,164 @@ async def stream(ws: WebSocket):
             session['conn_id'] = my_conn_id
             session['display_langs'] = display_langs
 
-    if session.get('local_ht'):
-        await _stream_local_ht(ws, session_id, session, my_conn_id)
-    else:
-        await _stream_gladia(ws, session_id, session, my_conn_id)
+    # Bounded so a stalled backend can't grow audio memory without bound;
+    # chunks that arrive while no backend is consuming get dropped.
+    audio_q: asyncio.Queue = asyncio.Queue(maxsize=64)
+    switch_event = asyncio.Event()
+    disconnect_event = asyncio.Event()
+    pending_switch: dict = {}
+
+    async def router():
+        try:
+            while True:
+                try:
+                    data = await ws.receive()
+                except WebSocketDisconnect:
+                    return
+                if data.get('type') == 'websocket.disconnect':
+                    return
+                msg_bytes = data.get('bytes')
+                if msg_bytes:
+                    try:
+                        audio_q.put_nowait(msg_bytes)
+                    except asyncio.QueueFull:
+                        try:
+                            audio_q.get_nowait()
+                            audio_q.put_nowait(msg_bytes)
+                        except (asyncio.QueueEmpty, asyncio.QueueFull):
+                            pass
+                    continue
+                msg_text = data.get('text')
+                if not msg_text:
+                    continue
+                try:
+                    ctrl = json.loads(msg_text)
+                except Exception:
+                    continue
+                ctrl_type = ctrl.get('type')
+                if ctrl_type == 'display_langs':
+                    langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
+                    with _lock:
+                        if sessions.get(session_id) is session:
+                            session['display_langs'] = langs
+                elif ctrl_type == 'switch_source_language':
+                    new_lang = ctrl.get('language', 'auto')
+                    pending_switch['language'] = new_lang
+                    switch_event.set()
+        finally:
+            disconnect_event.set()
+
+    router_task = asyncio.create_task(router())
+    backend_task: asyncio.Task | None = None
+
+    try:
+        while not disconnect_event.is_set():
+            # Drain any audio buffered between backends — playing it through
+            # a freshly-opened Gladia stream would be out of sync with the
+            # speaker by however long the switch took.
+            while True:
+                try:
+                    audio_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+            if session.get('local_ht'):
+                backend_task = asyncio.create_task(
+                    _run_local_ht_backend(ws, session_id, session, audio_q)
+                )
+            else:
+                backend_task = asyncio.create_task(
+                    _run_gladia_backend(ws, session_id, session, audio_q)
+                )
+
+            switch_wait = asyncio.create_task(switch_event.wait())
+            disc_wait = asyncio.create_task(disconnect_event.wait())
+            done, pending = await asyncio.wait(
+                {backend_task, switch_wait, disc_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in pending:
+                t.cancel()
+
+            if disconnect_event.is_set():
+                break
+
+            if switch_event.is_set():
+                switch_event.clear()
+                new_lang = pending_switch.pop('language', 'auto')
+                log.info("stream: switching session=%s to src_lang=%s", session_id, new_lang)
+
+                if not backend_task.done():
+                    backend_task.cancel()
+                    try:
+                        await backend_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                try:
+                    await ws.send_text(json.dumps({
+                        'type': 'language_switching', 'language': new_lang,
+                    }))
+                except Exception:
+                    pass
+
+                try:
+                    await _reconfigure_session_language(session, new_lang)
+                except Exception as e:
+                    log.error("stream: language switch failed: %s", e)
+                    try:
+                        await ws.send_text(json.dumps({
+                            'type': 'language_switch_failed',
+                            'language': new_lang,
+                            'error': str(e),
+                        }))
+                    except Exception:
+                        pass
+                    # Loop to recreate a backend with the still-current session config
+                    continue
+
+                try:
+                    await ws.send_text(json.dumps({
+                        'type': 'language_switched', 'language': new_lang,
+                    }))
+                except Exception:
+                    pass
+                continue
+
+            # Backend exited on its own (Gladia disconnect, network error, …).
+            # Without a fresh signal we'd loop forever; let the client reconnect.
+            log.warning("stream: backend exited unexpectedly (session=%s)", session_id)
+            break
+    finally:
+        if backend_task is not None and not backend_task.done():
+            backend_task.cancel()
+            try:
+                await backend_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        router_task.cancel()
+        try:
+            await router_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        with _lock:
+            if sessions.get(session_id) is session and session.get('conn_id') == my_conn_id:
+                session['broadcaster_connected'] = False
+        log.info("stream: closed session=%s", session_id)
 
 
-async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict, conn_id: int):
-    """Handle the local Haitian Creole Whisper transcription path."""
-    log.info("stream: session=%s (local HT)", session_id)
+async def _run_local_ht_backend(ws: WebSocket, session_id: str, session: dict,
+                                audio_q: asyncio.Queue):
+    """Consume PCM chunks from audio_q, run them through local Whisper, and
+    push transcripts/translations back over ws. Returns on cancellation."""
+    log.info("backend: session=%s (local HT)", session_id)
 
     def send_callback(msg):
         asyncio.run_coroutine_threadsafe(ws.send_text(msg), _loop)
 
-    prev_sentences = []
+    prev_sentences: list = []
     prev_lock = threading.Lock()
-    transcribe_q = queue.Queue()
+    transcribe_q: queue.Queue = queue.Queue()
     state = {'text_buffer': ''}
 
     def transcription_worker():
@@ -702,7 +916,7 @@ async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict, conn_i
     worker = threading.Thread(target=transcription_worker, daemon=True)
     worker.start()
 
-    sample_buffer = []
+    sample_buffer: list = []
 
     def flush():
         nonlocal sample_buffer
@@ -714,159 +928,109 @@ async def _stream_local_ht(ws: WebSocket, session_id: str, session: dict, conn_i
 
     try:
         while True:
-            try:
-                data = await ws.receive()
-            except WebSocketDisconnect:
-                break
-            if data['type'] == 'websocket.disconnect':
-                break
-            msg_bytes = data.get('bytes')
-            if not msg_bytes:
-                msg_text = data.get('text')
-                if msg_text:
-                    try:
-                        ctrl = json.loads(msg_text)
-                        if ctrl.get('type') == 'display_langs':
-                            langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
-                            with _lock:
-                                if sessions.get(session_id) is session:
-                                    session['display_langs'] = langs
-                    except Exception:
-                        pass
-                continue
-
-            chunk_int16 = np.frombuffer(msg_bytes, dtype=np.int16)
+            chunk_bytes = await audio_q.get()
+            chunk_int16 = np.frombuffer(chunk_bytes, dtype=np.int16)
             if len(chunk_int16) == 0:
                 continue
             sample_buffer.append(chunk_int16)
             if sum(len(b) for b in sample_buffer) >= _MAX_CHUNK_SAMPLES:
                 flush()
-
+    except asyncio.CancelledError:
+        pass
     finally:
-        with _lock:
-            if sessions.get(session_id) is session and session.get('conn_id') == conn_id:
-                session['broadcaster_connected'] = False
         flush()
         transcribe_q.put(None)
         worker.join(timeout=30)
-        log.info("stream: local HT closed session=%s", session_id)
+        log.info("backend: local HT exited session=%s", session_id)
 
 
-async def _stream_gladia(ws: WebSocket, session_id: str, session: dict, conn_id: int):
-    """Handle the Gladia transcription/translation path."""
+async def _run_gladia_backend(ws: WebSocket, session_id: str, session: dict,
+                              audio_q: asyncio.Queue):
+    """Open a Gladia live session, forward audio from audio_q into it, and
+    relay transcripts back to ws. Returns when Gladia closes or is cancelled."""
     src_lang = session.get('src_lang', 'auto')
     gladia_url = session.get('gladia_url', '')
     if not gladia_url or not gladia_url.startswith("wss://"):
-        log.error("stream: invalid or missing Gladia URL in session: %r", gladia_url)
-        await ws.close()
+        log.error("backend: invalid Gladia URL in session: %r", gladia_url)
         return
 
-    log.info("stream: session=%s src_lang=%s connecting to Gladia at %s", session_id, src_lang, gladia_url)
-
+    log.info("backend: session=%s src_lang=%s connecting to Gladia", session_id, src_lang)
     audio_chunks = 0
     gladia_msgs = 0
+
     try:
         async with websockets.connect(gladia_url) as gladia_ws:
-            log.info("stream: Gladia connection established")
+            log.info("backend: Gladia connection established (session=%s)", session_id)
 
-            async def browser_to_gladia():
+            async def forward_audio():
                 nonlocal audio_chunks
-                try:
-                    while True:
-                        data = await ws.receive()
-                        if data['type'] == 'websocket.disconnect':
-                            log.info("stream/browser_to_gladia: browser closed connection")
-                            return
-                        msg_bytes = data.get('bytes')
-                        if msg_bytes:
-                            audio_chunks += 1
-                            if audio_chunks % 50 == 1:
-                                log.info("stream/forward_audio: relayed %d audio chunks", audio_chunks)
-                            await gladia_ws.send(msg_bytes)
-                            continue
-                        msg_text = data.get('text')
-                        if msg_text:
-                            try:
-                                ctrl = json.loads(msg_text)
-                                if ctrl.get('type') == 'display_langs':
-                                    langs = [l for l in ctrl.get('langs', []) if l in ALL_LANGS]
-                                    with _lock:
-                                        if sessions.get(session_id) is session:
-                                            session['display_langs'] = langs
-                            except Exception:
-                                pass
-                except WebSocketDisconnect:
-                    log.info("stream/browser_to_gladia: browser closed connection")
-                except Exception as e:
-                    log.warning("stream/browser_to_gladia: exception: %s", e)
+                while True:
+                    chunk = await audio_q.get()
+                    audio_chunks += 1
+                    if audio_chunks % 50 == 1:
+                        log.info("backend: relayed %d audio chunks", audio_chunks)
+                    await gladia_ws.send(chunk)
 
-            async def gladia_to_browser():
+            async def forward_transcripts():
                 nonlocal gladia_msgs
-                try:
-                    async for raw in gladia_ws:
-                        gladia_msgs += 1
-                        msg_type = None
+                async for raw in gladia_ws:
+                    gladia_msgs += 1
+                    msg_type = None
+                    to_send = raw
+                    try:
+                        msg = json.loads(raw)
+                        msg_type = msg.get('type')
 
-                        to_send = raw
-                        try:
-                            msg = json.loads(raw)
-                            msg_type = msg.get('type')
+                        if msg_type == 'transcript':
+                            data_obj = msg.get('data') or {}
+                            utterance = data_obj.get('utterance') or {}
+                            if utterance.get('text'):
+                                utterance['text'] = _filter_text(utterance['text'])
+                                to_send = json.dumps(msg)
+                            if src_lang == 'en':
+                                is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
+                                if is_final and utterance.get('text'):
+                                    _enqueue_tts(session_id, 'en', utterance['text'])
 
-                            if msg_type == 'transcript':
-                                data_obj = msg.get('data') or {}
-                                utterance = data_obj.get('utterance') or {}
-                                if utterance.get('text'):
-                                    utterance['text'] = _filter_text(utterance['text'])
-                                    to_send = json.dumps(msg)
-                                if src_lang == 'en':
-                                    is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
-                                    if is_final and utterance.get('text'):
-                                        _enqueue_tts(session_id, 'en', utterance['text'])
+                        elif msg_type == 'translation':
+                            data_field = msg.get('data', {})
+                            translated = data_field.get('translated_utterance') or {}
+                            if translated.get('text'):
+                                translated['text'] = _filter_text(translated['text'])
+                                to_send = json.dumps(msg)
+                            lang = (data_field.get('target_language') or '').lower()
+                            text = translated.get('text', '')
+                            if lang in ALL_LANGS and text:
+                                _enqueue_tts(session_id, lang, text)
+                    except Exception:
+                        pass
 
-                            elif msg_type == 'translation':
-                                data_field = msg.get('data', {})
-                                translated = data_field.get('translated_utterance') or {}
-                                if translated.get('text'):
-                                    translated['text'] = _filter_text(translated['text'])
-                                    to_send = json.dumps(msg)
-                                lang = (data_field.get('target_language') or '').lower()
-                                text = translated.get('text', '')
-                                if lang in ALL_LANGS and text:
-                                    _enqueue_tts(session_id, lang, text)
-                        except Exception:
-                            pass
+                    if msg_type in ('transcript', 'translation'):
+                        if gladia_msgs <= 5 or gladia_msgs % 20 == 0:
+                            log.info("backend: gladia msg #%d type=%s", gladia_msgs, msg_type)
+                    else:
+                        log.info("backend: gladia msg #%d type=%s", gladia_msgs, msg_type)
 
-                        if msg_type in ('transcript', 'translation'):
-                            if gladia_msgs <= 5 or gladia_msgs % 20 == 0:
-                                log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
-                        else:
-                            log.info("stream: gladia msg #%d type=%s", gladia_msgs, msg_type)
+                    try:
+                        await ws.send_text(to_send)
+                    except Exception as e:
+                        log.warning("backend: browser send error: %s", e)
+                        return
 
-                        try:
-                            await ws.send_text(to_send)
-                        except Exception as e:
-                            log.warning("stream: browser send error: %s", e)
-                            return
-                except Exception as e:
-                    log.warning("stream/gladia_to_browser: %s", e)
-
-            task1 = asyncio.create_task(browser_to_gladia())
-            task2 = asyncio.create_task(gladia_to_browser())
+            task1 = asyncio.create_task(forward_audio())
+            task2 = asyncio.create_task(forward_transcripts())
             try:
                 await asyncio.wait({task1, task2}, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 task1.cancel()
                 task2.cancel()
                 await asyncio.gather(task1, task2, return_exceptions=True)
-
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        log.error("stream: failed to connect to Gladia: %s", e)
-    finally:
-        with _lock:
-            if sessions.get(session_id) is session and session.get('conn_id') == conn_id:
-                session['broadcaster_connected'] = False
-
-    log.info("stream: closing (audio_chunks=%d, gladia_msgs=%d)", audio_chunks, gladia_msgs)
+        log.error("backend: Gladia error (session=%s): %s", session_id, e)
+    log.info("backend: Gladia exited session=%s (audio=%d, gladia_msgs=%d)",
+             session_id, audio_chunks, gladia_msgs)
 
 
 @app.websocket("/listen-stream")
