@@ -142,6 +142,27 @@
     background: var(--c);
     color: #fff;
   }
+  .lang-btn.switching {
+    position: relative;
+    color: transparent !important;
+    pointer-events: none;
+  }
+  .lang-btn.switching::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 12px;
+    height: 12px;
+    margin: -6px 0 0 -6px;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    color: var(--c);
+    animation: lang-spin 0.7s linear infinite;
+  }
+  .lang-btn.active.switching::after { color: #fff; }
+  @keyframes lang-spin { to { transform: rotate(360deg); } }
 
   #controls {
     display: flex;
@@ -809,28 +830,57 @@ if (_hasCode) {
 updateStartBtn();
 
 // ── Language toggle ────────────────────────────────────────────────────────
+// While a switch is in flight we hold the previous language here so we can
+// revert the UI if the server reports the swap failed.
+let pendingSwitch = null;
+
+function setLangBtnsSwitching(targetLang, on) {
+  document.querySelectorAll('.lang-btn').forEach(b => {
+    if (on) {
+      b.classList.toggle('switching', b.dataset.lang === targetLang);
+      b.disabled = true;
+    } else {
+      b.classList.remove('switching');
+      b.disabled = false;
+    }
+  });
+}
+
+function setActiveLangBtn(lang) {
+  document.querySelectorAll('.lang-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.lang === lang);
+  });
+}
+
 document.querySelectorAll('.lang-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
+  btn.addEventListener('click', () => {
     const lang = btn.dataset.lang;
     if (lang === selectedLang) return;
-    selectedLang = lang;
-    document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
 
-    if (isRunning) {
-      const sid = currentSessionId;
-      currentSessionId = null; // clear so startSession always calls init-session
-      await stopSession(false);
-      // Explicitly end the backend session so init-session won't see an active broadcaster.
-      if (sid) {
-        try {
-          await fetch(BASE + 'end-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sid }),
-          });
-        } catch (_) {}
-      }
-      startSession();
+    // Not currently streaming — just remember the choice and update the UI.
+    if (!isRunning || !ws || ws.readyState !== WebSocket.OPEN) {
+      selectedLang = lang;
+      setActiveLangBtn(lang);
+      return;
+    }
+    // Already switching — ignore clicks until the current swap resolves.
+    if (pendingSwitch) return;
+
+    pendingSwitch = { from: selectedLang, to: lang };
+    selectedLang = lang;
+    setActiveLangBtn(lang);
+    setLangBtnsSwitching(lang, true);
+    detectedSourceLang = null;
+    clearPanels();
+    try {
+      ws.send(JSON.stringify({ type: 'switch_source_language', language: lang }));
+    } catch (err) {
+      console.warn('switch send failed', err);
+      // Roll back optimistic UI change
+      selectedLang = pendingSwitch.from;
+      setActiveLangBtn(selectedLang);
+      setLangBtnsSwitching(lang, false);
+      pendingSwitch = null;
     }
   });
 });
@@ -962,13 +1012,13 @@ function clearPanels() {
 }
 
 // ── Session management ────────────────────────────────────────────────────
-async function startSession() {
-  if (isRunning) return;
+async function startSession(options = {}) {
+  if (isRunning) return false;
 
   clearReconnectTimer();
 
   const code = sessionCodeInput.value.trim();
-  if (code.length !== 6) return;
+  if (code.length !== 6) return false;
 
   // Init session
   try {
@@ -979,14 +1029,15 @@ async function startSession() {
     });
     const data = await resp.json();
     if (!resp.ok) {
+      if (resp.status === 409 && options.silentOnBusy) return false;
       sessionCodeInput.classList.add('error');
       alert(data.error || `Failed to start session (${resp.status})`);
-      return;
+      return false;
     }
     currentSessionId = data.session_id;
   } catch (err) {
     alert('Failed to start session: ' + err.message);
-    return;
+    return false;
   }
 
   sessionIdEl.textContent = currentSessionId;
@@ -1000,7 +1051,7 @@ async function startSession() {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch (err) {
     alert('Microphone access denied: ' + err.message);
-    return;
+    return false;
   }
 
   isRunning = true;
@@ -1028,6 +1079,10 @@ async function startSession() {
 
   ws.addEventListener('close', (evt) => {
     console.warn('[ws] Backend WebSocket closed', evt.code, evt.reason);
+    if (pendingSwitch) {
+      setLangBtnsSwitching(null, false);
+      pendingSwitch = null;
+    }
     if (!isRunning) return;
     if (evt.code !== 1000) {
       scheduleReconnect();
@@ -1038,20 +1093,42 @@ async function startSession() {
     console.error('[ws] Backend WebSocket error', evt);
     if (isRunning) scheduleReconnect();
   });
+
+  return true;
+}
+
+function resetUiToStopped() {
+  sessionIdEl.style.display = 'none';
+  sessionCodeInput.style.display = '';
+  copySessionBtn.disabled = true;
+  qrBtn.disabled = true;
+  updateStartBtn();
+  stopBtn.disabled = true;
+  statusDot.classList.remove('live');
+  bottomPartial.textContent = '';
 }
 
 async function stopSession(userInitiated = true) {
   isRunning = false;
   clearReconnectTimer();
 
-  // Send terminate to Gladia via ws
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.send(JSON.stringify({ type: 'stop_recording' }));
-    } catch (_) {}
-    setTimeout(() => { try { ws.close(1000); } catch (_) {} }, 200);
+  // Close the WebSocket and await the close event so callers (e.g. the
+  // language toggle) know the server has run its /stream finally block
+  // — and freed broadcaster_connected — before they call init-session.
+  if (ws) {
+    const oldWs = ws;
+    ws = null;
+    const closed = new Promise(resolve => {
+      oldWs.addEventListener('close', () => resolve());
+      oldWs.addEventListener('error', () => resolve());
+    });
+    if (oldWs.readyState === WebSocket.OPEN) {
+      try { oldWs.send(JSON.stringify({ type: 'stop_recording' })); } catch (_) {}
+    }
+    try { oldWs.close(1000); } catch (_) {}
+    // Cap the wait so we don't hang if the server never acks.
+    await Promise.race([closed, new Promise(r => setTimeout(r, 500))]);
   }
-  ws = null;
 
   stopAudio();
 
@@ -1065,16 +1142,7 @@ async function stopSession(userInitiated = true) {
       }).catch(() => {});
     }
     currentSessionId = null;
-
-    // Restore code input.
-    sessionIdEl.style.display = 'none';
-    sessionCodeInput.style.display = '';
-    copySessionBtn.disabled = true;
-    qrBtn.disabled = true;
-    updateStartBtn();
-    stopBtn.disabled = true;
-    statusDot.classList.remove('live');
-    bottomPartial.textContent = '';
+    resetUiToStopped();
   }
 }
 
@@ -1138,6 +1206,28 @@ function float32ToInt16(float32) {
 // ── Gladia message routing ────────────────────────────────────────────────
 function handleGladiaMessage(msg) {
   const type = msg.type;
+
+  if (type === 'language_switching') {
+    // Server-acked; keep spinner up while it allocates Gladia and reopens.
+    return;
+  }
+
+  if (type === 'language_switched') {
+    setLangBtnsSwitching(null, false);
+    pendingSwitch = null;
+    return;
+  }
+
+  if (type === 'language_switch_failed') {
+    setLangBtnsSwitching(null, false);
+    if (pendingSwitch) {
+      selectedLang = pendingSwitch.from;
+      setActiveLangBtn(selectedLang);
+      pendingSwitch = null;
+    }
+    alert('Language switch failed' + (msg.error ? `: ${msg.error}` : '.'));
+    return;
+  }
 
   if (type === 'transcript') {
     const data = msg.data || {};
