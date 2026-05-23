@@ -927,7 +927,7 @@ document.getElementById('qr-btn').addEventListener('click', () => {
   const box = document.getElementById('qr-code-box');
   box.innerHTML = '';
   const img = document.createElement('img');
-  img.src = BASE + 'qr?url=' + encodeURIComponent(qrUrl);
+  img.src = BASE + 'api/qr?url=' + encodeURIComponent(qrUrl);
   img.width = 220;
   img.height = 220;
   box.appendChild(img);
