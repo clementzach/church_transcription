@@ -987,10 +987,18 @@ async def _run_gladia_backend(ws: WebSocket, session_id: str, session: dict,
                             if utterance.get('text'):
                                 utterance['text'] = _filter_text(utterance['text'])
                                 to_send = json.dumps(msg)
-                            if src_lang == 'en':
-                                is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
-                                if is_final and utterance.get('text'):
-                                    _enqueue_tts(session_id, 'en', utterance['text'])
+                            # Gladia excludes the source language from translation
+                            # targets, so same-language listeners only get audio
+                            # via this transcript path. TTS for whatever language
+                            # this utterance is in (detected in auto mode, fixed
+                            # src_lang otherwise).
+                            is_final = (utterance.get('is_final') is True) or (data_obj.get('is_final') is True)
+                            if is_final and utterance.get('text'):
+                                utt_lang = (utterance.get('language') or '').lower()
+                                if utt_lang not in ALL_LANGS:
+                                    utt_lang = src_lang if src_lang in ALL_LANGS else None
+                                if utt_lang:
+                                    _enqueue_tts(session_id, utt_lang, utterance['text'])
 
                         elif msg_type == 'translation':
                             data_field = msg.get('data', {})
