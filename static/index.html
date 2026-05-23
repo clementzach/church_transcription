@@ -752,7 +752,9 @@ const BASE_PATH = _hasCode
   : location.pathname.replace(/\/?$/, '/');
 
 function updateStartBtn() {
-  startBtn.disabled = sessionCodeInput.value.length !== 6;
+  const valid = sessionCodeInput.value.length === 6;
+  startBtn.disabled = !valid;
+  qrBtn.disabled = !valid;
 }
 
 sessionCodeInput.addEventListener('input', () => {
@@ -1172,10 +1174,11 @@ const qrOverlay = document.getElementById('qr-overlay');
 let qrInstance = null;
 
 qrBtn.addEventListener('click', () => {
-  if (!currentSessionId) return;
+  const sessionCode = currentSessionId || sessionCodeInput.value;
+  if (!sessionCode || sessionCode.length !== 6) return;
   // Derive listener URL from the existing Listener link — never hardcoded
   const listenerHref = document.getElementById('listener-link').href;
-  const qrUrl = listenerHref + '?session=' + currentSessionId;
+  const qrUrl = listenerHref + '?session=' + sessionCode;
 
   const box = document.getElementById('qr-code-box');
   box.innerHTML = '';
