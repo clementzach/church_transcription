@@ -5,7 +5,7 @@ python-dotenv
 httpx
 websockets
 google-cloud-texttospeech>=2.29.0
-google-genai
+google-genai==1.74.0
 openai
 anthropic
 pydub
