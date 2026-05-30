@@ -252,9 +252,15 @@ def _translate_ht_to(ht_text, target_lang, prev_sentences, prev_translation=None
     )
 
     resp = google_llm_client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-2.5-flash-lite',
         contents=prompt,
         config=_google_genai.types.GenerateContentConfig(
+            # 2.5 models can "think" before answering, which pushed a short
+            # translation to 7-13 s on plain flash and tripped Google's 504s.
+            # Force thinking off so flash-lite answers immediately.
+            thinking_config=_google_genai.types.ThinkingConfig(thinking_budget=0),
+            # We pass no tools; skip the automatic-function-calling round-trips.
+            automatic_function_calling=_google_genai.types.AutomaticFunctionCallingConfig(disable=True),
             http_options=_google_genai.types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS),
         ),
     )
