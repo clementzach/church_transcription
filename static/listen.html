@@ -631,6 +631,13 @@ let audioCtx = null;
 let nextPlayTime = 0;                       // when the last scheduled chunk ends
 let audioConfig = { sampleRate: 24000, channels: 1, sampleWidth: 2 };
 const audioQueue = [];                      // raw PCM ArrayBuffers held until unlocked
+let scheduledSources = [];                  // sources scheduled but not yet finished
+// TTS audio for each utterance arrives in a burst (synthesis outpaces real time),
+// so it's scheduled ahead of the playhead. That lead is fine for one utterance, but
+// across utterances it can accumulate and the listener drifts behind the live
+// speaker with no way to recover. If the scheduled lead exceeds this many seconds,
+// we drop the backlog and snap back to live.
+const MAX_BUFFER_AHEAD = 4.0;
 let audioUnlocked = false;                  // requires user gesture before playback
 
 // ── Login UI ───────────────────────────────────────────────────────────────
@@ -901,6 +908,7 @@ function unlockAudio() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   audioCtx.resume();
   nextPlayTime = 0;
+  scheduledSources = [];
   document.getElementById('start-audio-btn').style.display = 'none';
   // We're inside a user gesture here — the right moment to ask the browser to
   // keep the screen awake for the rest of the listening session.
@@ -951,13 +959,23 @@ function scheduleChunk(buffer) {
   source.connect(audioCtx.destination);
 
   const now = audioCtx.currentTime;
+  // If the scheduled lead has grown past MAX_BUFFER_AHEAD we've fallen behind the
+  // live speaker. Stop everything still queued and resync to now so the listener
+  // jumps back to live rather than playing an ever-growing backlog.
+  if (nextPlayTime - now > MAX_BUFFER_AHEAD) {
+    for (const s of scheduledSources) { try { s.stop(); } catch (e) {} }
+    scheduledSources = [];
+    nextPlayTime = 0;
+  }
   // Schedule immediately after the previous chunk, with a small lookahead.
   const startAt = Math.max(now + 0.02, nextPlayTime);
   source.start(startAt);
   nextPlayTime = startAt + audioBuf.duration;
+  scheduledSources.push(source);
 
   setAudioDot(true);
   source.onended = () => {
+    scheduledSources = scheduledSources.filter(s => s !== source);
     if (audioCtx.currentTime >= nextPlayTime - 0.1) setAudioDot(false);
   };
 }

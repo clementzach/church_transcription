@@ -79,6 +79,7 @@ _MAX_CHUNK_SAMPLES = 10 * _WHISPER_SR   # hard cap: flush audio to Whisper every
 _SILENCE_RMS_THRESHOLD = 350                    # Int16 RMS below this counts as silence
 _SILENCE_FLUSH_SAMPLES = int(0.6 * _WHISPER_SR) # 600 ms of trailing silence triggers a flush
 _MIN_FLUSH_SAMPLES = int(1.0 * _WHISPER_SR)     # never early-flush less than 1 s of audio
+_MAX_PENDING_CHUNKS = 3                          # cap transcribe backlog; drop oldest beyond this
 _GEMINI_TIMEOUT_MS = 15000                      # bound a translation call (ms)
 
 _TRANSLATION_LANG_NAMES = {
@@ -252,7 +253,7 @@ def _translate_ht_to(ht_text, target_lang, prev_sentences, prev_translation=None
     )
 
     resp = google_llm_client.models.generate_content(
-        model='gemini-2.5-flash-lite',
+        model='gemini-3.1-flash-lite',
         contents=prompt,
         config=_google_genai.types.GenerateContentConfig(
             # 2.5 models can "think" before answering, which pushed a short
@@ -1011,16 +1012,22 @@ async def _run_local_ht_backend(ws: WebSocket, session_id: str, session: dict,
             audio_np = transcribe_q.get()
             if audio_np is None:
                 break
-            with prev_lock:
-                prev = list(prev_sentences)
-            ht_text = _transcribe_and_broadcast_ht(
-                session_id, audio_np, prev, prev_translations, send_callback
-            )
-            if ht_text:
+            # Guard the whole iteration: a single unhandled exception here would
+            # silently kill this thread and stop all transcription for the rest of
+            # the session. Log and keep going instead.
+            try:
                 with prev_lock:
-                    prev_sentences.append(ht_text)
-                    if len(prev_sentences) > 2:
-                        del prev_sentences[:-2]
+                    prev = list(prev_sentences)
+                ht_text = _transcribe_and_broadcast_ht(
+                    session_id, audio_np, prev, prev_translations, send_callback
+                )
+                if ht_text:
+                    with prev_lock:
+                        prev_sentences.append(ht_text)
+                        if len(prev_sentences) > 2:
+                            del prev_sentences[:-2]
+            except Exception:
+                log.exception("[local_ht:%s] transcription worker iteration failed", session_id)
 
     worker = threading.Thread(target=transcription_worker, daemon=True)
     worker.start()
@@ -1040,6 +1047,16 @@ async def _run_local_ht_backend(ws: WebSocket, session_id: str, session: dict,
     def flush():
         if sample_buffer:
             audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
+            # If the worker has fallen behind (Whisper slower than real time),
+            # drop the oldest queued audio so we stay near-live instead of
+            # accumulating unbounded lag. Losing a little audio beats a growing
+            # delay that looks like a stall.
+            while transcribe_q.qsize() >= _MAX_PENDING_CHUNKS:
+                try:
+                    transcribe_q.get_nowait()
+                    log.warning("[local_ht:%s] transcribe backlog — dropped a chunk", session_id)
+                except queue.Empty:
+                    break
             transcribe_q.put(audio_np)
         reset_buffer()
 
@@ -1062,14 +1079,14 @@ async def _run_local_ht_backend(ws: WebSocket, session_id: str, session: dict,
                 has_voice = True
 
             if buffered_samples >= _MAX_CHUNK_SAMPLES:
-                # Hard cap. Only transcribe if we actually heard speech; otherwise
-                # drop the silence so Whisper isn't run on dead air.
-                if has_voice:
-                    flush()
-                else:
-                    reset_buffer()
+                # Hard cap reached — always transcribe. Whisper's own VAD drops
+                # dead air, so we never discard audio here (a miscalibrated RMS
+                # gate must not be able to swallow real speech).
+                flush()
             elif (has_voice and silence_run >= _SILENCE_FLUSH_SAMPLES
                   and buffered_samples >= _MIN_FLUSH_SAMPLES):
+                # Early flush at a natural pause. This is only an optimization;
+                # if the RMS gate never trips we simply fall back to the cap.
                 flush()
     except asyncio.CancelledError:
         cancelled = True
