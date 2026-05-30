@@ -72,8 +72,15 @@ if LOCAL_HAITIAN_PATH:
 
 # ── Local HT audio chunking / translation constants ───────────────────────
 _WHISPER_SR = 16000
-_MAX_CHUNK_SAMPLES = 10 * _WHISPER_SR   # flush audio to Whisper every 10 s max
-_MAX_TRANSLATION_WORDS = 40             # also flush text buffer at this word count
+_MAX_CHUNK_SAMPLES = 10 * _WHISPER_SR   # hard cap: flush audio to Whisper every 10 s max
+# Early-flush on a natural pause so we don't always wait the full 10 s. We watch
+# incoming PCM energy; once we've heard speech and then ~600 ms of near-silence,
+# we flush the buffered audio at that pause for lower latency and a clean cut.
+_SILENCE_RMS_THRESHOLD = 350                    # Int16 RMS below this counts as silence
+_SILENCE_FLUSH_SAMPLES = int(0.6 * _WHISPER_SR) # 600 ms of trailing silence triggers a flush
+_MIN_FLUSH_SAMPLES = int(1.0 * _WHISPER_SR)     # never early-flush less than 1 s of audio
+_MAX_PENDING_CHUNKS = 3                          # cap transcribe backlog; drop oldest beyond this
+_GEMINI_TIMEOUT_MS = 15000                      # bound a translation call (ms)
 
 _TRANSLATION_LANG_NAMES = {
     'en': 'English',
@@ -217,8 +224,13 @@ def _teardown_session(session, reason='Session ended'):
                 pass
 
 
-def _translate_ht_to(ht_text, target_lang, prev_sentences):
-    """Translate Haitian Creole text to target_lang using Gemini text model."""
+def _translate_ht_to(ht_text, target_lang, prev_sentences, prev_translation=None):
+    """Translate one chunk of Haitian Creole text to target_lang using Gemini.
+
+    prev_sentences is recent HT context (already translated); prev_translation is
+    our own most recent output in target_lang. Both are passed so the model
+    continues consistently across chunks rather than re-translating from scratch.
+    """
     lang_name = _TRANSLATION_LANG_NAMES[target_lang]
     context_lines = list(prev_sentences)[-2:]
 
@@ -229,25 +241,44 @@ def _translate_ht_to(ht_text, target_lang, prev_sentences):
         "garbled by speech recognition."
     )
     if context_lines:
-        prompt += "\n\nPrevious sentences (for context):\n" + "\n".join(context_lines)
+        prompt += "\n\nPreceding Haitian Creole text (already translated, for context):\n" + "\n".join(context_lines)
+    if prev_translation:
+        prompt += (
+            f"\n\nYour previous {lang_name} translation of that context "
+            "(continue from it consistently; do not repeat it):\n" + prev_translation
+        )
     prompt += (
-        f"\n\nTranslate the following Haitian Creole text to {lang_name}. "
+        f"\n\nTranslate only the following new Haitian Creole text to {lang_name}. "
         "Output only the translation with no explanation:\n" + ht_text
     )
 
     resp = google_llm_client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.1-flash-lite',
         contents=prompt,
+        config=_google_genai.types.GenerateContentConfig(
+            # 2.5 models can "think" before answering, which pushed a short
+            # translation to 7-13 s on plain flash and tripped Google's 504s.
+            # Force thinking off so flash-lite answers immediately.
+            thinking_config=_google_genai.types.ThinkingConfig(thinking_budget=0),
+            # We pass no tools; skip the automatic-function-calling round-trips.
+            automatic_function_calling=_google_genai.types.AutomaticFunctionCallingConfig(disable=True),
+            http_options=_google_genai.types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS),
+        ),
     )
     return resp.text.strip()
 
 
-def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentences, send_callback):
-    """Transcribe audio with faster-whisper VAD, buffer text until a sentence boundary
-    or max word count, then translate active languages in parallel.
+def _transcribe_and_broadcast_ht(session_id, audio_np, prev_sentences, prev_translations, send_callback):
+    """Transcribe one audio chunk with faster-whisper, broadcast the HT transcript
+    and HT TTS, then translate the chunk into every active language in parallel.
 
-    Returns (ht_text, updated_text_buffer). ht_text is empty string if Whisper
-    produced nothing; text_buffer carries over across calls until flushed.
+    The caller segments audio at natural pauses, so each chunk is translated
+    immediately (no sentence buffering) for low latency. prev_sentences (recent
+    HT text) and prev_translations (last output per language) are passed to Gemini
+    as context so terminology stays consistent across chunks.
+
+    Returns the HT transcript ('' if Whisper produced nothing) and updates
+    prev_translations in place for languages translated this call.
     """
     chunk_secs = len(audio_np) / _WHISPER_SR
     t0 = time.time()
@@ -259,13 +290,13 @@ def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentenc
         ht_text = " ".join(seg.text.strip() for seg in segments).strip()
     except Exception as e:
         log.error("[local_ht:%s] Whisper error: %s", session_id, e)
-        return '', text_buffer
+        return ''
     elapsed = time.time() - t0
     log.info("[local_ht:%s] chunk=%.1fs whisper=%.2fs text=%.60s",
              session_id, chunk_secs, elapsed, ht_text or '(empty)')
 
     if not ht_text:
-        return '', text_buffer
+        return ''
 
     ht_text = _filter_text(ht_text)
 
@@ -278,21 +309,10 @@ def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentenc
     except Exception:
         pass
 
-    # HT listeners get audio on every chunk — no need to wait for a full sentence.
+    # HT listeners get audio on every chunk.
     _enqueue_tts(session_id, 'ht', ht_text)
 
-    # Accumulate into the translation buffer and check for a flush trigger.
-    text_buffer = (text_buffer + ' ' + ht_text).strip()
-    ends_sentence = text_buffer[-1] in '.?!…' if text_buffer else False
-    word_count = len(text_buffer.split())
-
-    if not ends_sentence and word_count < _MAX_TRANSLATION_WORDS:
-        return ht_text, text_buffer
-
-    # Flush: translate the buffered text into every language that has a listener.
-    text_to_translate = text_buffer
-    text_buffer = ''
-
+    # Translate this chunk into every language that has a listener or display panel.
     with _lock:
         sess = sessions.get(session_id)
         display_langs = set(sess.get('display_langs', ALL_LANGS)) if sess else set()
@@ -303,11 +323,11 @@ def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentenc
         ]
 
     if not active_langs:
-        return ht_text, text_buffer
+        return ht_text
 
     def translate_one(lang):
         try:
-            translated = _translate_ht_to(text_to_translate, lang, prev_sentences)
+            translated = _translate_ht_to(ht_text, lang, prev_sentences, prev_translations.get(lang))
             return lang, _filter_text(translated) if translated else None
         except Exception as e:
             log.error("[local_ht:%s] Translation to %s failed: %s", session_id, lang, e)
@@ -319,6 +339,7 @@ def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentenc
     for lang, translated in results:
         if not translated:
             continue
+        prev_translations[lang] = translated
         try:
             send_callback(json.dumps({
                 'type': 'translation',
@@ -331,7 +352,7 @@ def _transcribe_and_broadcast_ht(session_id, audio_np, text_buffer, prev_sentenc
             pass
         _enqueue_tts(session_id, lang, translated)
 
-    return ht_text, text_buffer
+    return ht_text
 
 
 def _expire_session(session_id):
@@ -972,43 +993,74 @@ async def _run_local_ht_backend(ws: WebSocket, session_id: str, session: dict,
     push transcripts/translations back over ws. Returns on cancellation."""
     log.info("backend: session=%s (local HT)", session_id)
 
+    # Set on teardown so an in-flight worker (which may be mid-translation when
+    # the broadcaster switches languages) stops pushing now-stale text to the ws.
+    closing = threading.Event()
+
     def send_callback(msg):
+        if closing.is_set():
+            return
         asyncio.run_coroutine_threadsafe(ws.send_text(msg), _loop)
 
     prev_sentences: list = []
+    prev_translations: dict = {}   # last output per lang; only touched by the worker
     prev_lock = threading.Lock()
     transcribe_q: queue.Queue = queue.Queue()
-    state = {'text_buffer': ''}
 
     def transcription_worker():
         while True:
             audio_np = transcribe_q.get()
             if audio_np is None:
                 break
-            with prev_lock:
-                prev = list(prev_sentences)
-            ht_text, state['text_buffer'] = _transcribe_and_broadcast_ht(
-                session_id, audio_np, state['text_buffer'], prev, send_callback
-            )
-            if ht_text:
+            # Guard the whole iteration: a single unhandled exception here would
+            # silently kill this thread and stop all transcription for the rest of
+            # the session. Log and keep going instead.
+            try:
                 with prev_lock:
-                    prev_sentences.append(ht_text)
-                    if len(prev_sentences) > 2:
-                        del prev_sentences[:-2]
+                    prev = list(prev_sentences)
+                ht_text = _transcribe_and_broadcast_ht(
+                    session_id, audio_np, prev, prev_translations, send_callback
+                )
+                if ht_text:
+                    with prev_lock:
+                        prev_sentences.append(ht_text)
+                        if len(prev_sentences) > 2:
+                            del prev_sentences[:-2]
+            except Exception:
+                log.exception("[local_ht:%s] transcription worker iteration failed", session_id)
 
     worker = threading.Thread(target=transcription_worker, daemon=True)
     worker.start()
 
     sample_buffer: list = []
+    buffered_samples = 0
+    silence_run = 0      # consecutive trailing near-silent samples
+    has_voice = False    # whether any speech has been heard since the last reset
+
+    def reset_buffer():
+        nonlocal sample_buffer, buffered_samples, silence_run, has_voice
+        sample_buffer = []
+        buffered_samples = 0
+        silence_run = 0
+        has_voice = False
 
     def flush():
-        nonlocal sample_buffer
-        if not sample_buffer:
-            return
-        audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
-        sample_buffer = []
-        transcribe_q.put(audio_np)
+        if sample_buffer:
+            audio_np = np.concatenate(sample_buffer).astype(np.float32) / 32768.0
+            # If the worker has fallen behind (Whisper slower than real time),
+            # drop the oldest queued audio so we stay near-live instead of
+            # accumulating unbounded lag. Losing a little audio beats a growing
+            # delay that looks like a stall.
+            while transcribe_q.qsize() >= _MAX_PENDING_CHUNKS:
+                try:
+                    transcribe_q.get_nowait()
+                    log.warning("[local_ht:%s] transcribe backlog — dropped a chunk", session_id)
+                except queue.Empty:
+                    break
+            transcribe_q.put(audio_np)
+        reset_buffer()
 
+    cancelled = False
     try:
         while True:
             chunk_bytes = await audio_q.get()
@@ -1016,15 +1068,39 @@ async def _run_local_ht_backend(ws: WebSocket, session_id: str, session: dict,
             if len(chunk_int16) == 0:
                 continue
             sample_buffer.append(chunk_int16)
-            if sum(len(b) for b in sample_buffer) >= _MAX_CHUNK_SAMPLES:
+            buffered_samples += len(chunk_int16)
+
+            # Track trailing silence so we can flush at a natural pause.
+            rms = float(np.sqrt(np.mean(chunk_int16.astype(np.float32) ** 2)))
+            if rms < _SILENCE_RMS_THRESHOLD:
+                silence_run += len(chunk_int16)
+            else:
+                silence_run = 0
+                has_voice = True
+
+            if buffered_samples >= _MAX_CHUNK_SAMPLES:
+                # Hard cap reached — always transcribe. Whisper's own VAD drops
+                # dead air, so we never discard audio here (a miscalibrated RMS
+                # gate must not be able to swallow real speech).
+                flush()
+            elif (has_voice and silence_run >= _SILENCE_FLUSH_SAMPLES
+                  and buffered_samples >= _MIN_FLUSH_SAMPLES):
+                # Early flush at a natural pause. This is only an optimization;
+                # if the RMS gate never trips we simply fall back to the cap.
                 flush()
     except asyncio.CancelledError:
-        pass
+        cancelled = True
     finally:
-        flush()
+        # On a clean exit, flush remaining audio. On cancellation (language switch)
+        # abandon it — it'd be stale once the new backend opens — and don't block
+        # the switch on in-flight Whisper/Gemini work; the daemon worker finishes
+        # in the background. closing stops it from emitting now-stale transcripts.
+        closing.set()
+        if not cancelled:
+            flush()
         transcribe_q.put(None)
-        worker.join(timeout=30)
-        log.info("backend: local HT exited session=%s", session_id)
+        worker.join(timeout=1.0 if cancelled else 30)
+        log.info("backend: local HT exited session=%s (cancelled=%s)", session_id, cancelled)
 
 
 async def _run_gladia_backend(ws: WebSocket, session_id: str, session: dict,
