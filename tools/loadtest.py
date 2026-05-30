@@ -132,6 +132,7 @@ class ListenerStat:
     connect_t: float = 0.0
     first_audio_t: float | None = None
     last_audio_t: float | None = None
+    _prev_bytes: int = 0   # snapshot at last report, for interval deltas
 
 
 @dataclass
@@ -139,6 +140,7 @@ class Stats:
     listeners: list = field(default_factory=list)
     broadcaster_chunks: int = 0
     broadcaster_errors: int = 0
+    broadcaster_keepalive_deaths: int = 0
 
 
 # ── Broadcaster ────────────────────────────────────────────────────────────
@@ -163,8 +165,12 @@ async def run_broadcaster(http_base, ws_base, session_id, pcm, chunk_ms,
 
     chunk_samples = int(SRC_SAMPLE_RATE * chunk_ms / 1000)
     try:
+        # ping_interval=None disables this client's own keepalive pings. When
+        # the generator and server share a box, a momentarily busy client loop
+        # can otherwise fail to process pongs within the timeout and kill its
+        # own connections — a rig artifact, not a server failure.
         async with websockets.connect(f"{ws_base}/stream", max_size=None,
-                                      ping_interval=20, open_timeout=15) as ws:
+                                      ping_interval=None, open_timeout=15) as ws:
             await ws.send(json.dumps({'session_id': session_id,
                                       'display_langs': TRANSLATION_AND_SOURCE}))
             start = time.monotonic()
@@ -187,6 +193,8 @@ async def run_broadcaster(http_base, ws_base, session_id, pcm, chunk_ms,
         if not stop_evt.is_set():
             print(f"[broadcaster {session_id}] stream error: {e}")
             stats.broadcaster_errors += 1
+            if 'keepalive' in str(e).lower():
+                stats.broadcaster_keepalive_deaths += 1
 
 
 # ── Listener ─────────────────────────────────────────────────────────────────
@@ -194,7 +202,7 @@ async def run_broadcaster(http_base, ws_base, session_id, pcm, chunk_ms,
 async def run_listener(ws_base, session_id, lang, stop_evt, st: ListenerStat):
     try:
         async with websockets.connect(f"{ws_base}/listen-stream", max_size=None,
-                                      ping_interval=20, open_timeout=15) as ws:
+                                      ping_interval=None, open_timeout=15) as ws:
             await ws.send(json.dumps({'session_id': session_id, 'language': lang}))
             st.connected = True
             st.connect_t = time.monotonic()
@@ -230,19 +238,30 @@ def rand_session_id():
 
 
 async def reporter(stats: Stats, sampler, interval, stop_evt, t0):
+    prev_total = 0
+    last_t = t0
     while not stop_evt.is_set():
         await asyncio.sleep(interval)
         ls = stats.listeners
+        now = time.monotonic()
+        dt = now - last_t
+        elapsed = now - t0
         connected = sum(1 for s in ls if s.connected and not s.error)
         errored = sum(1 for s in ls if s.error)
-        total_mb = sum(s.audio_bytes for s in ls) / 1e6
-        elapsed = time.monotonic() - t0
-        kbps = total_mb * 8000 / elapsed if elapsed else 0
-        with_audio = sum(1 for s in ls if s.audio_chunks > 0)
+        # Instantaneous (this-interval) egress and how many listeners actually
+        # received data this interval — a stall shows up here even though the
+        # cumulative counts keep looking healthy.
+        total_bytes = sum(s.audio_bytes for s in ls)
+        receiving_now = sum(1 for s in ls if s.audio_bytes > s._prev_bytes)
+        for s in ls:
+            s._prev_bytes = s.audio_bytes
+        inst_mbit = (total_bytes - prev_total) * 8 / 1e6 / dt if dt else 0
+        prev_total = total_bytes
+        last_t = now
         line = (f"[{elapsed:6.1f}s] listeners {connected}/{len(ls)} ok "
-                f"({errored} err), {with_audio} receiving audio | "
-                f"egress {total_mb:7.1f} MB ({kbps:6.0f} kbit/s avg) | "
-                f"bcast chunks {stats.broadcaster_chunks}")
+                f"({errored} err), {receiving_now} receiving now | "
+                f"egress {total_bytes / 1e6:7.1f} MB ({inst_mbit:5.1f} Mbit/s now) | "
+                f"bcast {stats.broadcaster_chunks}")
         if sampler:
             s = sampler.sample()
             if s:
@@ -341,6 +360,11 @@ async def main():
     print(f"  duration:            {elapsed:.1f}s")
     print(f"  broadcasters:        {args.broadcasters} "
           f"({stats.broadcaster_chunks} chunks sent, {stats.broadcaster_errors} errors)")
+    if stats.broadcaster_keepalive_deaths:
+        print(f"    NOTE: {stats.broadcaster_keepalive_deaths} broadcaster(s) died of "
+              f"keepalive timeout — usually the generator loop starving when\n"
+              f"          co-located with the server, not a server failure. "
+              f"Re-run from a separate host to confirm.")
     print(f"  listeners connected: {len(ok)}/{args.listeners}  ({len(errored)} errored)")
     print(f"  listeners w/ audio:  {len(receiving)}/{args.listeners}")
     print(f"  total egress:        {total_mb:.1f} MB  "
