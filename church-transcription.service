@@ -19,7 +19,7 @@ Restart=on-failure
 RestartSec=2
 User=www-data
 Group=www-data
-MemoryMax=500M
+MemoryMax=12G
 
 [Install]
 WantedBy=multi-user.target
