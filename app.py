@@ -44,7 +44,11 @@ _tts_client = _texttospeech.TextToSpeechClient(
 # LINEAR16 is not supported for streaming_synthesize; MULAW is used instead.
 TTS_SAMPLE_RATE = 24000
 # After this many seconds of no new text, close the gRPC stream and reopen.
-TTS_INACTIVITY_TIMEOUT = 30.0
+# Also the idle window after which a worker with no listeners exits and frees
+# its thread (a future listener re-spawns it lazily via _ensure_tts_worker).
+# 2 min keeps streams open across natural speech pauses, cutting gRPC reopens
+# (and thus Google TTS quota churn) when several services run at once.
+TTS_INACTIVITY_TIMEOUT = 120.0
 
 ALL_LANGS          = ['en', 'es', 'ht', 'pt', 'zh', 'fr']
 TRANSLATION_LANGS  = ['es', 'ht', 'pt', 'zh', 'fr']
@@ -156,6 +160,31 @@ def _force_put(q: queue.Queue, item):
     q.put_nowait(item)
 
 
+# Per-listener queue depth. A slow listener (poor mobile signal) would otherwise
+# accumulate audio without bound; we cap and drop the oldest chunk to keep the
+# listener current with the live speaker rather than falling behind / leaking.
+LISTENER_QUEUE_MAXSIZE = 100
+
+
+def _enqueue_listener(q: asyncio.Queue, item):
+    """Put item into a listener's bounded queue, dropping the oldest on overflow.
+
+    Runs on the event loop (scheduled via call_soon_threadsafe from TTS threads)
+    so all queue access stays single-threaded.
+    """
+    try:
+        q.put_nowait(item)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            q.put_nowait(item)
+        except asyncio.QueueFull:
+            pass
+
+
 def _broadcast(session_id, lang, message):
     """Send a JSON str or raw PCM bytes to every listener for (session, lang).
 
@@ -169,7 +198,7 @@ def _broadcast(session_id, lang, message):
         listeners = list(session['listener_registry'].get(lang, []))
     for q in listeners:
         try:
-            _loop.call_soon_threadsafe(q.put_nowait, message)
+            _loop.call_soon_threadsafe(_enqueue_listener, q, message)
         except Exception:
             pass
 
@@ -182,8 +211,8 @@ def _teardown_session(session, reason='Session ended'):
         _force_put(session['tts_queues'][lang], None)
         for q in list(session['listener_registry'].get(lang, [])):
             try:
-                _loop.call_soon_threadsafe(q.put_nowait, error_msg)
-                _loop.call_soon_threadsafe(q.put_nowait, None)
+                _loop.call_soon_threadsafe(_enqueue_listener, q, error_msg)
+                _loop.call_soon_threadsafe(_enqueue_listener, q, None)
             except Exception:
                 pass
 
@@ -402,6 +431,21 @@ def _enqueue_tts(session_id, lang, text):
     _force_put(session['tts_queues'][lang], text)
 
 
+def _ensure_tts_worker(session_id, lang):
+    """Start a TTS worker for (session, lang) if one isn't already running.
+
+    Workers are spawned lazily when the first listener for a language connects
+    and exit on their own after TTS_INACTIVITY_TIMEOUT once the last listener
+    leaves, so a session only holds threads for languages people actually use.
+    """
+    with _lock:
+        session = sessions.get(session_id)
+        if not session or lang in session['tts_workers']:
+            return
+        session['tts_workers'].add(lang)
+    threading.Thread(target=_tts_worker, args=(session_id, lang), daemon=True).start()
+
+
 def _tts_worker(session_id, lang):
     """Per-(session, lang) TTS worker.
 
@@ -436,16 +480,32 @@ def _tts_worker(session_id, lang):
         )
     )
 
+    exited_idle = False
     while not shutdown.is_set():
         first_text = None
+        idle_start = time.time()
         while not shutdown.is_set():
             try:
                 first_text = tts_q.get(timeout=1.0)
                 break
             except queue.Empty:
+                # No work pending. If nobody is listening and we've been idle
+                # past the timeout, give up the thread; a new listener will
+                # re-spawn us via _ensure_tts_worker. The de-registration and
+                # the no-listener check share one _lock hold so a listener
+                # connecting concurrently can't be left without a worker.
+                if time.time() - idle_start < TTS_INACTIVITY_TIMEOUT:
+                    continue
+                with _lock:
+                    s = sessions.get(session_id)
+                    if s is not None and not s['listener_registry'].get(lang):
+                        s['tts_workers'].discard(lang)
+                        exited_idle = True
+                if exited_idle:
+                    break
                 continue
 
-        if shutdown.is_set():
+        if exited_idle or shutdown.is_set():
             break
         if first_text is None:
             break
@@ -590,6 +650,7 @@ async def init_session(request: Request):
             'broadcaster_connected': False,
             'listener_registry': {lang: [] for lang in ALL_LANGS},
             'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
+            'tts_workers': set(),  # langs with a live worker; see _ensure_tts_worker
             'timer': timer,
             'local_ht': True,
         }
@@ -598,8 +659,8 @@ async def init_session(request: Request):
                 # Another request claimed the slot during the wait above.
                 return busy_response
             sessions[session_id] = session
-        for lang in ALL_LANGS:
-            threading.Thread(target=_tts_worker, args=(session_id, lang), daemon=True).start()
+        # TTS workers start lazily when the first listener for a language
+        # connects (see _ensure_tts_worker), so an unused language costs nothing.
         timer.start()
         log.info("Session created (local HT): id=%s timeout=%ds", session_id, SESSION_TIMEOUT_SECS)
         return {'session_id': session_id, 'local_ht': True}
@@ -658,14 +719,13 @@ async def init_session(request: Request):
                 'broadcaster_connected': False,
                 'listener_registry': {lang: [] for lang in ALL_LANGS},
                 'tts_queues': {lang: queue.Queue(maxsize=1) for lang in ALL_LANGS},
+                'tts_workers': set(),  # langs with a live worker; see _ensure_tts_worker
                 'timer': timer,
             }
             sessions[session_id] = session
 
-        for lang in ALL_LANGS:
-            threading.Thread(
-                target=_tts_worker, args=(session_id, lang), daemon=True
-            ).start()
+        # TTS workers start lazily when the first listener for a language
+        # connects (see _ensure_tts_worker), so an unused language costs nothing.
         timer.start()
 
         log.info("Session created: id=%s timeout=%ds gladia_url=%s",
@@ -1095,7 +1155,7 @@ async def listen_stream(ws: WebSocket):
 
     log.info("listen-stream: session_id=%s lang=%s", session_id, lang)
 
-    q = asyncio.Queue()
+    q = asyncio.Queue(maxsize=LISTENER_QUEUE_MAXSIZE)
     with _lock:
         session = sessions.get(session_id)
         if not session or lang not in ALL_LANGS:
@@ -1106,6 +1166,11 @@ async def listen_stream(ws: WebSocket):
         session['listener_registry'][lang].append(q)
         log.info("listen-stream: registered listener for session=%s lang=%s (total=%d)",
                  session_id, lang, len(session['listener_registry'][lang]))
+
+    # Spawn the TTS worker for this language if it isn't already running. Done
+    # after releasing _lock (the registry append above happens-before the
+    # worker's no-listener check, so a worker mid-exit can't strand us).
+    _ensure_tts_worker(session_id, lang)
 
     # Tell the client the audio format so it can decode chunks without WAV headers.
     await ws.send_text(json.dumps({
