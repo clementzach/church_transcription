@@ -137,7 +137,7 @@ GOOGLE_TTS_VOICES = {
 #   'tts_queues':        {lang: queue.Queue(maxsize=1)},   # stdlib Queue; used by TTS threads
 #   'timer': threading.Timer,
 # }
-SESSION_TIMEOUT_SECS = 2 * 3600  # 2 hours
+SESSION_TIMEOUT_SECS = 4 * 3600  # 4 hours
 _lock = threading.Lock()
 sessions = {}
 
@@ -362,7 +362,7 @@ def _expire_session(session_id):
         session = sessions.pop(session_id, None)
     if session is None:
         return
-    _teardown_session(session, 'Session expired (2-hour limit reached)')
+    _teardown_session(session, 'Session expired (4-hour limit reached)')
 
 
 def _build_gladia_config(src_lang):

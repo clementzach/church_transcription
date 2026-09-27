@@ -46,7 +46,7 @@ python app.py          # listens on :5001
 1. Broadcaster hits `POST /init-session` → gets a Gladia WebSocket URL and a 6-char session ID.
 2. Broadcaster opens `WebSocket /stream`, sends the Gladia URL and session ID as the first JSON message, then streams PCM audio.
 3. Listeners open `/listen`, enter session ID + language, connect via `WebSocket /listen-stream`.
-4. After **2 hours** the session timer fires (`_expire_session`): all listener WebSockets receive an error message and are closed; the session ID is invalidated.
+4. After **4 hours** the session timer fires (`_expire_session`): all listener WebSockets receive an error message and are closed; the session ID is invalidated.
 
 ## TTS worker (`_tts_worker`)
 

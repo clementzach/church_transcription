@@ -174,4 +174,4 @@ Browser (broadcaster)
                           WebSocket /listen-stream ──► Browser (listener)
 ```
 
-Sessions expire automatically after 2 hours. All session state is in-process; a single gunicorn worker is required.
+Sessions expire automatically after 4 hours. All session state is in-process; a single gunicorn worker is required.
